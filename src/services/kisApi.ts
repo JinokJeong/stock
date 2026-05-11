@@ -164,19 +164,15 @@ async function fetchInvestor(code: string, client: AxiosInstance) {
   const fNet0 = parseInt(today.frgn_ntby_qty, 10) || 0;
   const fNet1 = parseInt(yesterday.frgn_ntby_qty, 10) || 0;
 
-  const fBuyVol  = parseInt(today.frgn_buyv_vol, 10) || 0;
-  const fSellVol = parseInt(today.frgn_seln_vol, 10) || 0;
-  const oBuyVol  = parseInt(today.orgn_buyv_vol, 10) || 0;
-  const oSellVol = parseInt(today.orgn_seln_vol, 10) || 0;
-
+  // 단위: 백만원 (million KRW) — 그대로 저장 후 InvestorBar에서 변환
   return {
-    foreignNetAmount:          parseInt(today.frgn_ntby_tr_pbmn, 10) || 0,
-    institutionNetAmount:      parseInt(today.orgn_ntby_tr_pbmn, 10) || 0,
-    retailNetAmount:           parseInt(today.indv_ntby_tr_pbmn, 10) || 0,
-    foreignBuyAmount:          fBuyVol,
-    foreignSellAmount:         fSellVol,
-    institutionBuyAmount:      oBuyVol,
-    institutionSellAmount:     oSellVol,
+    foreignNetAmount:     parseInt(today.frgn_ntby_tr_pbmn,  10) || 0,
+    institutionNetAmount: parseInt(today.orgn_ntby_tr_pbmn,  10) || 0,
+    retailNetAmount:      parseInt(today.prsn_ntby_tr_pbmn,  10) || 0, // prsn = 개인
+    foreignBuyAmount:     parseInt(today.frgn_shnu_tr_pbmn,  10) || 0,
+    foreignSellAmount:    parseInt(today.frgn_seln_tr_pbmn,  10) || 0,
+    institutionBuyAmount: parseInt(today.orgn_shnu_tr_pbmn,  10) || 0,
+    institutionSellAmount:parseInt(today.orgn_seln_tr_pbmn,  10) || 0,
     foreignConsecutiveDays,
     institutionConsecutiveDays,
     foreignTurnedPositive: fNet0 > 0 && fNet1 <= 0,

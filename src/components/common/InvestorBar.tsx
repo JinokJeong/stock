@@ -9,17 +9,13 @@ interface Props {
   retailNet: number;
 }
 
+// val은 백만원 단위 (KIS API 응답 단위)
 function formatAmount(val: number): string {
   if (val === 0) return '0억';
   const abs = Math.abs(val);
-  if (abs >= 100_000_000) {
-    const b = val / 100_000_000;
-    return `${Math.abs(b) >= 10 ? b.toFixed(0) : b.toFixed(1)}억`;
-  }
-  // 1억 미만은 만원 단위
-  const m = Math.round(val / 10_000);
-  if (m === 0) return '0만';
-  return `${m.toLocaleString()}만`;
+  if (abs >= 10_000) return `${(val / 10_000).toFixed(0)}조`;   // 10,000백만원 = 1조
+  if (abs >= 100)   return `${(val / 100).toFixed(1)}억`;        // 100백만원 = 1억
+  return `${(val * 100).toFixed(0)}만`;                           // 1백만원 = 100만원
 }
 
 function Bar({ label, value, total }: { label: string; value: number; total: number }) {
