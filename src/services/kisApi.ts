@@ -114,6 +114,9 @@ async function fetchPrice(code: string, client: AxiosInstance) {
   }));
   if (res.data.rt_cd !== '0') throw new Error(res.data.msg1 ?? '현재가 조회 실패');
   const d = res.data.output ?? {};
+  const ahPrice  = parseInt(d.ovtm_untp, 10)        || 0;
+  const ahChange = parseInt(d.ovtm_untp_prdy_vrss, 10) || 0;
+  const ahRate   = parseFloat(d.ovtm_untp_prdy_ctrt)   || 0;
   return {
     code,
     name: (d.hts_kor_isnm as string)?.trim() || getStockName(code),
@@ -126,7 +129,19 @@ async function fetchPrice(code: string, client: AxiosInstance) {
     sectorCode:    (d.bstp_cls_code as string) || '',
     sectorName:    (d.bstp_kor_isnm as string)?.trim() || '',
     market: KOSPI200_SET.has(code) ? ('KOSPI' as const) : ('KOSDAQ' as const),
+    afterHoursPrice:      ahPrice  > 0 ? ahPrice  : undefined,
+    afterHoursChange:     ahPrice  > 0 ? ahChange : undefined,
+    afterHoursChangeRate: ahPrice  > 0 ? ahRate   : undefined,
   };
+}
+
+// ─── 한국 정규장 여부 판단 ────────────────────────────────────────────────────
+export function isKoreanMarketOpen(): boolean {
+  const kst = new Date(Date.now() + 9 * 3_600_000);
+  const day = kst.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const min = kst.getUTCHours() * 60 + kst.getUTCMinutes();
+  return min >= 9 * 60 && min < 15 * 60 + 30;
 }
 
 // ─── 투자자별 매매 (FHKST01010900) ───────────────────────────────────────────

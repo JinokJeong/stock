@@ -58,6 +58,10 @@ export interface StockData extends StockPrice, StockInvestor {
   kospiChange: number;
   sector5dayChange: number;
   market: 'KOSPI' | 'KOSDAQ';
+  // 시간외 단일가
+  afterHoursPrice?: number;
+  afterHoursChange?: number;
+  afterHoursChangeRate?: number;
 }
 
 export interface StockScreenData extends StockData {

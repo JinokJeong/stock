@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
-import { kisApi } from '../services/kisApi';
+import { kisApi, isKoreanMarketOpen } from '../services/kisApi';
 import { getStockName } from '../constants/stockUniverse';
 import { GaugeBar } from '../components/common/GaugeBar';
 
@@ -34,7 +34,10 @@ function StockRow({ code }: { code: string }) {
     );
   }
 
-  const changeColor = stock.changeRate >= 0 ? colors.up : colors.down;
+  const changeColor   = stock.changeRate >= 0 ? colors.up : colors.down;
+  const marketOpen    = isKoreanMarketOpen();
+  const hasAfterHours = !marketOpen && !!stock.afterHoursPrice;
+  const ahColor       = (stock.afterHoursChangeRate ?? 0) >= 0 ? colors.up : colors.down;
 
   return (
     <TouchableOpacity
@@ -53,10 +56,19 @@ function StockRow({ code }: { code: string }) {
         <GaugeBar value={stock.tradeStrength} max={200} showValue />
       </View>
       <View style={styles.rowRight}>
-        <Text style={styles.price}>{stock.price?.toLocaleString()}</Text>
+        <View style={styles.priceRow}>
+          <Text style={styles.price}>{stock.price?.toLocaleString()}</Text>
+          {!marketOpen && <Text style={styles.closeBadge}>종가</Text>}
+        </View>
         <Text style={[styles.change, { color: changeColor }]}>
           {stock.changeRate >= 0 ? '+' : ''}{stock.changeRate?.toFixed(2)}%
         </Text>
+        {hasAfterHours && (
+          <Text style={[styles.afterHours, { color: ahColor }]}>
+            시간외 {stock.afterHoursPrice?.toLocaleString()}
+            {'  '}{(stock.afterHoursChangeRate ?? 0) >= 0 ? '+' : ''}{stock.afterHoursChangeRate?.toFixed(2)}%
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -152,4 +164,11 @@ const styles = StyleSheet.create({
   sep: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
   placeholder: { color: colors.text3, fontSize: 12 },
   errorText: { color: colors.down, fontSize: 11, flex: 1, marginLeft: 8 },
+  priceRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  closeBadge: {
+    fontSize: 9, color: colors.text3,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: 3, paddingHorizontal: 3, paddingVertical: 1,
+  },
+  afterHours: { fontSize: 10, marginTop: 2 },
 });

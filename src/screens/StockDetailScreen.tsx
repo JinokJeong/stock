@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
-import { kisApi } from '../services/kisApi';
+import { kisApi, isKoreanMarketOpen } from '../services/kisApi';
 import { generateStockComment } from '../services/llmService';
 import { useLlmStore } from '../store/llmStore';
 import { CandleChart } from '../components/chart/CandleChart';
@@ -67,6 +67,9 @@ export function StockDetailScreen() {
   }
 
   const changeColor = stock.changeRate >= 0 ? colors.up : colors.down;
+  const marketOpen  = isKoreanMarketOpen();
+  const hasAfterHours = !marketOpen && !!stock.afterHoursPrice;
+  const ahColor = (stock.afterHoursChangeRate ?? 0) >= 0 ? colors.up : colors.down;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -80,10 +83,25 @@ export function StockDetailScreen() {
           <Text style={styles.meta}>{stock.market}</Text>
         </View>
         <View style={styles.priceBlock}>
-          <Text style={styles.price}>{stock.price?.toLocaleString()}</Text>
+          <View style={styles.priceRow}>
+            <Text style={styles.price}>{stock.price?.toLocaleString()}</Text>
+            {!marketOpen && <Text style={styles.closeBadge}>종가</Text>}
+          </View>
           <Text style={[styles.change, { color: changeColor }]}>
             {stock.changeRate >= 0 ? '+' : ''}{stock.changeRate?.toFixed(2)}%
           </Text>
+          {hasAfterHours && (
+            <View style={styles.ahRow}>
+              <Text style={styles.ahLabel}>시간외</Text>
+              <Text style={[styles.ahPrice, { color: ahColor }]}>
+                {stock.afterHoursPrice?.toLocaleString()}
+              </Text>
+              <Text style={[styles.ahChange, { color: ahColor }]}>
+                {(stock.afterHoursChangeRate ?? 0) >= 0 ? '+' : ''}
+                {stock.afterHoursChangeRate?.toFixed(2)}%
+              </Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -192,8 +210,18 @@ const styles = StyleSheet.create({
   name: { color: colors.text, fontSize: 16, fontWeight: '700' },
   meta: { color: colors.text3, fontSize: 10, marginTop: 2 },
   priceBlock: { alignItems: 'flex-end' },
+  priceRow:   { flexDirection: 'row', alignItems: 'center', gap: 4 },
   price: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  closeBadge: {
+    fontSize: 10, color: colors.text3,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: 3, paddingHorizontal: 3, paddingVertical: 1,
+  },
   change: { fontSize: 12, marginTop: 2 },
+  ahRow:    { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  ahLabel:  { fontSize: 10, color: colors.text3 },
+  ahPrice:  { fontSize: 12, fontWeight: '600' },
+  ahChange: { fontSize: 11 },
   scroll: { padding: 16, paddingBottom: 48, gap: 16 },
   kpiRow: { flexDirection: 'row', gap: 0 },
   section: { gap: 10 },
