@@ -51,9 +51,11 @@ async function getClient(): Promise<AxiosInstance> {
   kisClient = axios.create({
     baseURL: KIS_BASE,
     headers: {
+      'content-type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${token}`,
-      appkey: appKey ?? '',
+      appkey:   appKey ?? '',
       appsecret: appSecret ?? '',
+      custtype: 'P',
     },
     timeout: 10000,
   });
@@ -67,9 +69,10 @@ export function resetClient() {
 // ─── 현재가 (FHKST01010100) ──────────────────────────────────────────────────
 
 async function fetchPrice(code: string, client: AxiosInstance) {
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
   const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-price', {
     headers: { tr_id: 'FHKST01010100' },
-    params: { FID_COND_MRKT_DIV_CODE: 'J', FID_INPUT_ISCD: code },
+    params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
   });
   const d = res.data.output;
   return {
@@ -90,9 +93,10 @@ async function fetchPrice(code: string, client: AxiosInstance) {
 // ─── 투자자별 매매 (FHKST01010900) ───────────────────────────────────────────
 
 async function fetchInvestor(code: string, client: AxiosInstance) {
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
   const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-investor', {
     headers: { tr_id: 'FHKST01010900' },
-    params: { FID_COND_MRKT_DIV_CODE: 'J', FID_INPUT_ISCD: code },
+    params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
   });
   const rows: any[] = res.data.output ?? [];
 
@@ -152,9 +156,10 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
     }
   } catch {}
 
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
   const res = await client.get('/uapi/domestic-stock/v1/finance/financial-ratio', {
     headers: { tr_id: 'FHKST66430300' },
-    params: { FID_COND_MRKT_DIV_CODE: 'J', FID_INPUT_ISCD: code, FID_PERIOD_DIV_CODE: 'Y' },
+    params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code, FID_PERIOD_DIV_CODE: 'Y' },
   });
   const d = res.data.output?.[0] ?? {};
   const fin: Partial<StockFinancial> = {
@@ -189,10 +194,11 @@ async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<nu
     return d.toISOString().slice(0, 10).replace(/-/g, '');
   })();
 
+  const mktCode2 = KOSPI200_SET.has(code) ? 'J' : 'Q';
   const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-daily-price', {
     headers: { tr_id: 'FHKST01010400' },
     params: {
-      FID_COND_MRKT_DIV_CODE: 'J',
+      FID_COND_MRKT_DIV_CODE: mktCode2,
       FID_INPUT_ISCD: code,
       FID_INPUT_DATE_1: fromDate,
       FID_INPUT_DATE_2: toDate,
@@ -275,13 +281,20 @@ export async function getStockPrice(code: string): Promise<Partial<StockData>> {
 export async function getScreenerData(code: string): Promise<StockScreenData> {
   const client = await getClient();
 
+  const wrapErr = <T>(label: string, p: Promise<T>): Promise<T> =>
+    p.catch((e: any) => {
+      const status = e?.response?.status;
+      const msg    = e?.response?.data?.msg1 ?? e?.response?.data?.message ?? e?.message ?? '';
+      throw new Error(`[${label}] ${status ? `HTTP ${status}: ` : ''}${msg}`);
+    });
+
   // 병렬 호출: 현재가 + 투자자 + 재무 + 20일평균 + 지수
   const [priceData, investorData, financialData, avgVol20, kospiChg] = await Promise.all([
-    fetchPrice(code, client),
-    fetchInvestor(code, client),
-    fetchFinancial(code, client),
-    fetchAvgVolume20(code, client),
-    fetchKospiChange(client),
+    wrapErr('현재가', fetchPrice(code, client)),
+    wrapErr('투자자', fetchInvestor(code, client)),
+    wrapErr('재무', fetchFinancial(code, client)),
+    wrapErr('거래량', fetchAvgVolume20(code, client)),
+    wrapErr('지수', fetchKospiChange(client)),
   ]);
 
   const sectorIdx = await fetchSectorChange(priceData.sectorCode, client);
