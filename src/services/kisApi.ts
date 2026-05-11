@@ -10,7 +10,6 @@ const TOKEN_CACHE_KEY = 'KIS_ACCESS_TOKEN';
 const TOKEN_EXP_KEY   = 'KIS_TOKEN_EXPIRES_AT';
 const FIN_CACHE_PFX   = 'KIS_FIN_';
 const VOL_CACHE_PFX   = 'KIS_VOL_';
-const IDX_CACHE_KEY   = 'KIS_IDX';
 
 const KOSPI200_SET = new Set(KOSPI200);
 
@@ -66,14 +65,28 @@ export function resetClient() {
   kisClient = null;
 }
 
+// ─── 전역 Rate Limiter — 모든 GET 요청을 큐로 직렬화 ─────────────────────────
+// KIS 모의투자 한도: 초당 5건 → 250ms 이상 간격 보장
+const RATE_MS = 280;
+let _rateTail: Promise<void> = Promise.resolve();
+
+function rateGet<T>(fn: () => Promise<T>): Promise<T> {
+  const slot = _rateTail.then(() => fn());
+  _rateTail  = slot.then(
+    () => new Promise<void>((r) => setTimeout(r, RATE_MS)),
+    () => new Promise<void>((r) => setTimeout(r, RATE_MS)),
+  );
+  return slot;
+}
+
 // ─── 현재가 (FHKST01010100) ──────────────────────────────────────────────────
 
 async function fetchPrice(code: string, client: AxiosInstance) {
   const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
-  const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-price', {
+  const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-price', {
     headers: { tr_id: 'FHKST01010100' },
     params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
-  });
+  }));
   const d = res.data.output;
   return {
     code,
@@ -94,10 +107,10 @@ async function fetchPrice(code: string, client: AxiosInstance) {
 
 async function fetchInvestor(code: string, client: AxiosInstance) {
   const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
-  const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-investor', {
+  const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-investor', {
     headers: { tr_id: 'FHKST01010900' },
     params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
-  });
+  }));
   const rows: any[] = res.data.output ?? [];
 
   // 외국인 연속 순매수일 계산 (최신 → 과거 순)
@@ -157,10 +170,10 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
   } catch {}
 
   const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
-  const res = await client.get('/uapi/domestic-stock/v1/finance/financial-ratio', {
+  const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/finance/financial-ratio', {
     headers: { tr_id: 'FHKST66430300' },
     params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code, FID_PERIOD_DIV_CODE: 'Y' },
-  });
+  }));
   const d = res.data.output?.[0] ?? {};
   const fin: Partial<StockFinancial> = {
     code,
@@ -195,7 +208,7 @@ async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<nu
   })();
 
   const mktCode2 = KOSPI200_SET.has(code) ? 'J' : 'Q';
-  const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-daily-price', {
+  const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-daily-price', {
     headers: { tr_id: 'FHKST01010400' },
     params: {
       FID_COND_MRKT_DIV_CODE: mktCode2,
@@ -205,7 +218,7 @@ async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<nu
       FID_PERIOD_DIV_CODE: 'D',
       FID_ORG_ADJ_PRC: '1',
     },
-  });
+  }));
   const rows: any[] = res.data.output ?? [];
   const vols = rows.slice(0, 20).map((r: any) => parseInt(r.acml_vol, 10) || 0).filter(Boolean);
   const avgVol = vols.length > 0 ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 0;
@@ -217,10 +230,10 @@ async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<nu
 
 async function fetchKospiChange(client: AxiosInstance): Promise<number> {
   if (kospiChangeCache !== null) return kospiChangeCache;
-  const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-index-price', {
+  const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-index-price', {
     headers: { tr_id: 'FHPUP02100000' },
     params: { FID_COND_MRKT_DIV_CODE: 'U', FID_INPUT_ISCD: '0001' },
-  });
+  }));
   const d = res.data.output;
   kospiChangeCache = parseFloat(d.bstp_nmix_prdy_ctrt) || 0;
   return kospiChangeCache;
@@ -230,10 +243,10 @@ async function fetchSectorChange(sectorCode: string, client: AxiosInstance): Pro
   if (sectorCache[sectorCode]) return sectorCache[sectorCode];
   if (!sectorCode) return { changeRate: 0, change5day: 0 };
   try {
-    const res = await client.get('/uapi/domestic-stock/v1/quotations/inquire-index-price', {
+    const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-index-price', {
       headers: { tr_id: 'FHPUP02100000' },
       params: { FID_COND_MRKT_DIV_CODE: 'U', FID_INPUT_ISCD: sectorCode },
-    });
+    }));
     const d = res.data.output;
     const result = {
       changeRate: parseFloat(d.bstp_nmix_prdy_ctrt)  || 0,
@@ -281,28 +294,22 @@ export async function getStockPrice(code: string): Promise<Partial<StockData>> {
 export async function getScreenerData(code: string): Promise<StockScreenData> {
   const client = await getClient();
 
-  const call = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
-    try {
-      return await fn();
-    } catch (e: any) {
+  const wrap = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    try { return await fn(); } catch (e: any) {
       const status = e?.response?.status;
       const msg    = e?.response?.data?.msg1 ?? e?.response?.data?.message ?? e?.message ?? '';
       throw new Error(`[${label}] ${status ? `HTTP ${status}: ` : ''}${msg}`);
     }
   };
-  const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  // 순차 호출 — KIS 초당 요청 한도 준수
-  const priceData    = await call('현재가', () => fetchPrice(code, client));
-  await delay(120);
-  const investorData = await call('투자자', () => fetchInvestor(code, client));
-  await delay(120);
-  // 재무·거래량은 일별 캐시 — 캐시 히트 시 API 미호출
-  const financialData = await call('재무', () => fetchFinancial(code, client));
-  await delay(120);
-  const avgVol20      = await call('거래량', () => fetchAvgVolume20(code, client));
-  await delay(120);
-  const kospiChg      = await call('지수', () => fetchKospiChange(client));
+  // rateGet이 전역 큐로 속도 제한 — 여기서는 순서 보장만
+  const [priceData, investorData, financialData, avgVol20, kospiChg] = await Promise.all([
+    wrap('현재가', () => fetchPrice(code, client)),
+    wrap('투자자', () => fetchInvestor(code, client)),
+    wrap('재무',   () => fetchFinancial(code, client)),
+    wrap('거래량', () => fetchAvgVolume20(code, client)),
+    wrap('지수',   () => fetchKospiChange(client)),
+  ]);
 
   const sectorIdx = await fetchSectorChange(priceData.sectorCode, client);
   const sectorAvg = getSectorAvg(priceData.sectorName);

@@ -69,16 +69,16 @@ export function DashboardScreen() {
 
   const loadAll = async () => {
     setError(null);
-    for (const code of watchlist) {
-      try {
-        const data = await kisApi.getScreenerData(code);
-        updateStock(code, data);
-      } catch (e: any) {
-        updateStock(code, { error: e?.message ?? '불러오기 실패' } as any);
-      }
-      // KIS API 초당 요청 한도(20건) 준수
-      await new Promise<void>((r) => setTimeout(r, 250));
-    }
+    await Promise.all(
+      watchlist.map(async (code) => {
+        try {
+          const data = await kisApi.getScreenerData(code);
+          updateStock(code, data);
+        } catch (e: any) {
+          updateStock(code, { error: e?.message ?? '불러오기 실패' } as any);
+        }
+      })
+    );
   };
 
   useEffect(() => { loadAll(); }, []);
