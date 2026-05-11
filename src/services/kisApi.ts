@@ -112,7 +112,8 @@ async function fetchPrice(code: string, client: AxiosInstance) {
     headers: { tr_id: 'FHKST01010100' },
     params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
   }));
-  const d = res.data.output;
+  if (res.data.rt_cd !== '0') throw new Error(res.data.msg1 ?? '현재가 조회 실패');
+  const d = res.data.output ?? {};
   return {
     code,
     name: (d.hts_kor_isnm as string)?.trim() || getStockName(code),
@@ -136,6 +137,7 @@ async function fetchInvestor(code: string, client: AxiosInstance) {
     headers: { tr_id: 'FHKST01010900' },
     params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
   }));
+  if (res.data.rt_cd !== '0') throw new Error(res.data.msg1 ?? '투자자 조회 실패');
   const rows: any[] = res.data.output ?? [];
 
   // 외국인 연속 순매수일 계산 (최신 → 과거 순)
@@ -199,6 +201,7 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
     headers: { tr_id: 'FHKST66430300' },
     params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code, FID_PERIOD_DIV_CODE: 'Y' },
   }));
+  if (res.data.rt_cd !== '0') return { code, updatedAt: today }; // 재무 없는 종목은 빈값으로
   const d = res.data.output?.[0] ?? {};
   const fin: Partial<StockFinancial> = {
     code,
@@ -244,6 +247,7 @@ async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<nu
       FID_ORG_ADJ_PRC: '1',
     },
   }));
+  if (res.data.rt_cd !== '0') return 0;
   const rows: any[] = res.data.output ?? [];
   const vols = rows.slice(0, 20).map((r: any) => parseInt(r.acml_vol, 10) || 0).filter(Boolean);
   const avgVol = vols.length > 0 ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 0;
@@ -259,7 +263,7 @@ async function fetchKospiChange(client: AxiosInstance): Promise<number> {
     headers: { tr_id: 'FHPUP02100000' },
     params: { FID_COND_MRKT_DIV_CODE: 'U', FID_INPUT_ISCD: '0001' },
   }));
-  const d = res.data.output;
+  const d = res.data.output ?? {};
   kospiChangeCache = parseFloat(d.bstp_nmix_prdy_ctrt) || 0;
   return kospiChangeCache;
 }
@@ -272,7 +276,7 @@ async function fetchSectorChange(sectorCode: string, client: AxiosInstance): Pro
       headers: { tr_id: 'FHPUP02100000' },
       params: { FID_COND_MRKT_DIV_CODE: 'U', FID_INPUT_ISCD: sectorCode },
     }));
-    const d = res.data.output;
+    const d = res.data.output ?? {};
     const result = {
       changeRate: parseFloat(d.bstp_nmix_prdy_ctrt)  || 0,
       change5day: parseFloat(d.bstp_nmix_wghn_avrg)  || 0,
