@@ -11,13 +11,17 @@ interface Props {
 
 function formatBillion(val: number): string {
   const b = val / 100_000_000;
-  if (Math.abs(b) >= 10) return `${b.toFixed(0)}억`;
+  const abs = Math.abs(b);
+  if (abs < 0.05) return '0억';
+  if (abs >= 10) return `${b.toFixed(0)}억`;
   return `${b.toFixed(1)}억`;
 }
 
 function Bar({ label, value, total }: { label: string; value: number; total: number }) {
   const ratio = total > 0 ? Math.abs(value) / total : 0;
-  const barColor = value > 0 ? colors.buy : colors.down;
+  const isZero = Math.abs(value) < 5_000_000; // 500만원 미만은 중립
+  const barColor = isZero ? colors.text3 : value > 0 ? colors.buy : colors.down;
+  const formatted = formatBillion(value);
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
@@ -25,7 +29,7 @@ function Bar({ label, value, total }: { label: string; value: number; total: num
         <View style={[styles.fill, { width: `${Math.min(ratio * 100, 100)}%`, backgroundColor: barColor }]} />
       </View>
       <Text style={[styles.val, { color: barColor }]}>
-        {value > 0 ? '+' : ''}{formatBillion(value)}
+        {!isZero && value > 0 ? '+' : ''}{formatted}
       </Text>
     </View>
   );
