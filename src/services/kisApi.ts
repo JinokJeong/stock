@@ -15,6 +15,7 @@ const KOSPI200_SET = new Set(KOSPI200);
 
 // 세션 캐시 (앱 재시작 시 초기화)
 let kisClient: AxiosInstance | null = null;
+let kisClientPromise: Promise<AxiosInstance> | null = null; // 동시 생성 방지
 let sectorCache: Record<string, { changeRate: number; change5day: number }> = {};
 let kospiChangeCache: number | null = null;
 
@@ -44,34 +45,58 @@ async function getAccessToken(): Promise<string> {
 
 async function getClient(): Promise<AxiosInstance> {
   if (kisClient) return kisClient;
-  const token     = await getAccessToken();
-  const appKey    = await SecureStore.getItemAsync('KIS_APP_KEY');
-  const appSecret = await SecureStore.getItemAsync('KIS_APP_SECRET');
-  kisClient = axios.create({
-    baseURL: KIS_BASE,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${token}`,
-      appkey:   appKey ?? '',
-      appsecret: appSecret ?? '',
-      custtype: 'P',
-    },
-    timeout: 10000,
-  });
-  return kisClient;
+  // 동시에 여러 호출이 들어와도 토큰 요청은 1번만
+  if (kisClientPromise) return kisClientPromise;
+  kisClientPromise = (async () => {
+    const token     = await getAccessToken();
+    const appKey    = await SecureStore.getItemAsync('KIS_APP_KEY');
+    const appSecret = await SecureStore.getItemAsync('KIS_APP_SECRET');
+    kisClient = axios.create({
+      baseURL: KIS_BASE,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        Authorization:  `Bearer ${token}`,
+        appkey:         appKey ?? '',
+        appsecret:      appSecret ?? '',
+        custtype:       'P',
+      },
+      timeout: 10000,
+    });
+    kisClientPromise = null;
+    return kisClient;
+  })();
+  return kisClientPromise;
 }
 
 export function resetClient() {
-  kisClient = null;
+  kisClient        = null;
+  kisClientPromise = null;
 }
 
 // ─── 전역 Rate Limiter — 모든 GET 요청을 큐로 직렬화 ─────────────────────────
-// KIS 모의투자 한도: 초당 5건 → 250ms 이상 간격 보장
-const RATE_MS = 280;
+// 600ms 간격 = 초당 최대 1.6건. rate limit 에러 시 1.5초 대기 후 1회 재시도.
+const RATE_MS   = 600;
+const RETRY_MS  = 1500;
 let _rateTail: Promise<void> = Promise.resolve();
 
+function isRateLimitErr(e: any) {
+  const msg: string = e?.response?.data?.msg1 ?? '';
+  return msg.includes('초당') || e?.response?.data?.rt_cd === '1';
+}
+
 function rateGet<T>(fn: () => Promise<T>): Promise<T> {
-  const slot = _rateTail.then(() => fn());
+  const exec = async (): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e: any) {
+      if (isRateLimitErr(e)) {
+        await new Promise<void>((r) => setTimeout(r, RETRY_MS));
+        return fn(); // 1회 재시도
+      }
+      throw e;
+    }
+  };
+  const slot = _rateTail.then(exec);
   _rateTail  = slot.then(
     () => new Promise<void>((r) => setTimeout(r, RATE_MS)),
     () => new Promise<void>((r) => setTimeout(r, RATE_MS)),
