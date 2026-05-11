@@ -9,19 +9,22 @@ interface Props {
   retailNet: number;
 }
 
-function formatBillion(val: number): string {
-  const b = val / 100_000_000;
-  const abs = Math.abs(b);
-  if (abs < 0.05) return '0억';
-  if (abs >= 10) return `${b.toFixed(0)}억`;
-  return `${b.toFixed(1)}억`;
+function formatAmount(val: number): string {
+  if (val === 0) return '0억';
+  const abs = Math.abs(val);
+  if (abs >= 100_000_000) {
+    const b = val / 100_000_000;
+    return `${Math.abs(b) >= 10 ? b.toFixed(0) : b.toFixed(1)}억`;
+  }
+  // 1억 미만은 만원 단위
+  const m = Math.round(val / 10_000);
+  if (m === 0) return '0만';
+  return `${m.toLocaleString()}만`;
 }
 
 function Bar({ label, value, total }: { label: string; value: number; total: number }) {
   const ratio = total > 0 ? Math.abs(value) / total : 0;
-  const isZero = Math.abs(value) < 5_000_000; // 500만원 미만은 중립
-  const barColor = isZero ? colors.text3 : value > 0 ? colors.buy : colors.down;
-  const formatted = formatBillion(value);
+  const barColor = value > 0 ? colors.buy : value < 0 ? colors.down : colors.text3;
   return (
     <View style={styles.row}>
       <Text style={styles.label}>{label}</Text>
@@ -29,7 +32,7 @@ function Bar({ label, value, total }: { label: string; value: number; total: num
         <View style={[styles.fill, { width: `${Math.min(ratio * 100, 100)}%`, backgroundColor: barColor }]} />
       </View>
       <Text style={[styles.val, { color: barColor }]}>
-        {!isZero && value > 0 ? '+' : ''}{formatted}
+        {value > 0 ? '+' : ''}{formatAmount(value)}
       </Text>
     </View>
   );
