@@ -281,21 +281,28 @@ export async function getStockPrice(code: string): Promise<Partial<StockData>> {
 export async function getScreenerData(code: string): Promise<StockScreenData> {
   const client = await getClient();
 
-  const wrapErr = <T>(label: string, p: Promise<T>): Promise<T> =>
-    p.catch((e: any) => {
+  const call = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e: any) {
       const status = e?.response?.status;
       const msg    = e?.response?.data?.msg1 ?? e?.response?.data?.message ?? e?.message ?? '';
       throw new Error(`[${label}] ${status ? `HTTP ${status}: ` : ''}${msg}`);
-    });
+    }
+  };
+  const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-  // 병렬 호출: 현재가 + 투자자 + 재무 + 20일평균 + 지수
-  const [priceData, investorData, financialData, avgVol20, kospiChg] = await Promise.all([
-    wrapErr('현재가', fetchPrice(code, client)),
-    wrapErr('투자자', fetchInvestor(code, client)),
-    wrapErr('재무', fetchFinancial(code, client)),
-    wrapErr('거래량', fetchAvgVolume20(code, client)),
-    wrapErr('지수', fetchKospiChange(client)),
-  ]);
+  // 순차 호출 — KIS 초당 요청 한도 준수
+  const priceData    = await call('현재가', () => fetchPrice(code, client));
+  await delay(120);
+  const investorData = await call('투자자', () => fetchInvestor(code, client));
+  await delay(120);
+  // 재무·거래량은 일별 캐시 — 캐시 히트 시 API 미호출
+  const financialData = await call('재무', () => fetchFinancial(code, client));
+  await delay(120);
+  const avgVol20      = await call('거래량', () => fetchAvgVolume20(code, client));
+  await delay(120);
+  const kospiChg      = await call('지수', () => fetchKospiChange(client));
 
   const sectorIdx = await fetchSectorChange(priceData.sectorCode, client);
   const sectorAvg = getSectorAvg(priceData.sectorName);
