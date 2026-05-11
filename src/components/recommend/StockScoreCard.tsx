@@ -21,10 +21,8 @@ export function StockScoreCard({ stock, rank, onPress }: Props) {
       <View style={styles.header}>
         <Text style={styles.rank}>{rank}위</Text>
         <View style={styles.nameBlock}>
-          <Text style={styles.name} numberOfLines={1}>{stock.name}</Text>
-          <Text style={styles.meta}>
-            {stock.code}  {stock.market}
-          </Text>
+          <Text style={styles.name} numberOfLines={1}>{stock.name} ({stock.code})</Text>
+          <Text style={styles.meta}>{stock.market}</Text>
         </View>
         <View style={styles.priceBlock}>
           <Text style={styles.price}>{stock.price.toLocaleString()}</Text>

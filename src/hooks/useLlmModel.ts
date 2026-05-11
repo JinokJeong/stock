@@ -8,35 +8,49 @@ import {
 } from '../services/llmService';
 import RNFS from 'react-native-fs';
 
-const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/gemma-3-1b-it-Q4_K_M.gguf`;
+const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf`;
 
 export function useLlmModel() {
   const { status, downloadProgress, errorMessage, setStatus, setDownloadProgress, setError, setModelPath } =
     useLlmStore();
 
-  const initModel = useCallback(async () => {
+  // 다운로드 없이 이미 존재하는 모델만 로드 (앱 시작 시 자동 실행)
+  const tryLoadExisting = useCallback(async () => {
     try {
       setStatus('checking');
       const downloaded = await isModelDownloaded();
-
       if (!downloaded) {
-        setStatus('downloading');
-        await downloadModel((pct) => setDownloadProgress(pct));
+        setStatus('idle'); // 파일 없음 — 사용자가 수동으로 다운로드해야 함
+        return;
       }
-
       setModelPath(MODEL_PATH);
       setStatus('loading');
       await loadModel();
       setStatus('ready');
     } catch (e: any) {
-      setError(e?.message ?? '알 수 없는 오류');
+      setError(e?.message ?? '모델 로드 실패');
+      setStatus('error');
+    }
+  }, []);
+
+  // 사용자가 명시적으로 다운로드+로드 요청할 때 호출
+  const startDownload = useCallback(async () => {
+    try {
+      setStatus('downloading');
+      await downloadModel((pct) => setDownloadProgress(pct));
+      setModelPath(MODEL_PATH);
+      setStatus('loading');
+      await loadModel();
+      setStatus('ready');
+    } catch (e: any) {
+      setError(e?.message ?? '다운로드 실패');
       setStatus('error');
     }
   }, []);
 
   useEffect(() => {
     if (status === 'idle') {
-      initModel();
+      tryLoadExisting();
     }
   }, []);
 
@@ -45,6 +59,7 @@ export function useLlmModel() {
     downloadProgress,
     errorMessage,
     isReady: status === 'ready',
-    retry: initModel,
+    startDownload,
+    retry: startDownload,
   };
 }

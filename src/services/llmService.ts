@@ -3,8 +3,9 @@ import RNFS from 'react-native-fs';
 import { SentimentResult } from '../types/theme';
 
 const MODEL_URL =
-  'https://huggingface.co/bartowski/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf';
-const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/gemma-3-1b-it-Q4_K_M.gguf`;
+  'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf';
+const MODEL_PATH = `${RNFS.DocumentDirectoryPath}/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf`;
+const MIN_MODEL_SIZE = 250 * 1024 * 1024; // 250MB — 정상 파일 최소 크기 (실제 ~380MB)
 
 // llama.rn 동적 import (네이티브 빌드 전용)
 let ctx: any = null;
@@ -20,32 +21,79 @@ async function getLlamaModule() {
   }
 }
 
+async function getFileSize(path: string): Promise<number> {
+  try {
+    const stat = await RNFS.stat(path);
+    return Number(stat.size);
+  } catch {
+    return 0;
+  }
+}
+
+async function deleteIfExists(path: string): Promise<void> {
+  try {
+    if (await RNFS.exists(path)) await RNFS.unlink(path);
+  } catch {}
+}
+
 export async function isModelDownloaded(): Promise<boolean> {
-  return RNFS.exists(MODEL_PATH);
+  if (!(await RNFS.exists(MODEL_PATH))) return false;
+  const size = await getFileSize(MODEL_PATH);
+  if (size < MIN_MODEL_SIZE) {
+    // 불완전한 파일 삭제
+    await deleteIfExists(MODEL_PATH);
+    return false;
+  }
+  return true;
 }
 
 export async function downloadModel(
   onProgress: (pct: number) => void
 ): Promise<void> {
-  if (await RNFS.exists(MODEL_PATH)) {
+  // 이미 유효한 파일이 있으면 건너뜀
+  if (await isModelDownloaded()) {
     onProgress(1);
     return;
   }
-  await RNFS.downloadFile({
+  // 혹시 남은 불완전 파일 제거 후 새로 다운로드
+  await deleteIfExists(MODEL_PATH);
+
+  const result = await RNFS.downloadFile({
     fromUrl: MODEL_URL,
     toFile: MODEL_PATH,
-    progress: (r) => onProgress(r.bytesWritten / r.contentLength),
-    progressDivider: 2,
+    background: true,
+    progress: (r) => {
+      if (r.contentLength > 0) {
+        onProgress(r.bytesWritten / r.contentLength);
+      }
+    },
+    progressDivider: 5,
   }).promise;
+
+  if (result.statusCode !== 200) {
+    await deleteIfExists(MODEL_PATH);
+    throw new Error(`다운로드 실패 (HTTP ${result.statusCode})`);
+  }
+
+  const size = await getFileSize(MODEL_PATH);
+  if (size < MIN_MODEL_SIZE) {
+    await deleteIfExists(MODEL_PATH);
+    throw new Error(`파일 불완전 (${Math.round(size / 1024 / 1024)}MB — 최소 500MB 필요)`);
+  }
 }
 
 export async function loadModel(): Promise<void> {
   if (ctx) return;
   const llama = await getLlamaModule();
   if (!llama) throw new Error('llama.rn 모듈 없음 — Dev Build 필요');
+
+  if (!(await RNFS.exists(MODEL_PATH))) {
+    throw new Error('모델 파일 없음 — 먼저 다운로드 필요');
+  }
+
   ctx = await llama.initLlama({
     model: MODEL_PATH,
-    use_mlock: true,
+    use_mlock: false,
     n_ctx: 512,
     n_gpu_layers: 0,
   });

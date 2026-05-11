@@ -28,9 +28,13 @@ export function StockDetailScreen() {
   const llmStatus = useLlmStore((s) => s.status);
   const [comment, setComment] = useState('');
   const [commentLoading, setCommentLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    kisApi.getScreenerData(code).then((data) => updateStock(code, data));
+    setLoadError(null);
+    kisApi.getScreenerData(code)
+      .then((data) => updateStock(code, data))
+      .catch((e: any) => setLoadError(e?.message ?? '데이터 로드 실패'));
   }, [code]);
 
   useEffect(() => {
@@ -53,7 +57,10 @@ export function StockDetailScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.loading}>
-          <Text style={styles.loadingText}>로딩 중...</Text>
+          {loadError
+            ? <Text style={[styles.loadingText, { color: colors.down, textAlign: 'center', paddingHorizontal: 24 }]}>{loadError}</Text>
+            : <Text style={styles.loadingText}>로딩 중...</Text>
+          }
         </View>
       </SafeAreaView>
     );
@@ -69,8 +76,8 @@ export function StockDetailScreen() {
           <Text style={styles.backText}>← 뒤로</Text>
         </TouchableOpacity>
         <View style={styles.headerInfo}>
-          <Text style={styles.name}>{stock.name}</Text>
-          <Text style={styles.meta}>{code} · {stock.market}</Text>
+          <Text style={styles.name}>{stock.name} ({code})</Text>
+          <Text style={styles.meta}>{stock.market}</Text>
         </View>
         <View style={styles.priceBlock}>
           <Text style={styles.price}>{stock.price?.toLocaleString()}</Text>

@@ -8,8 +8,8 @@ import { useNavigation } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
 import { kisApi } from '../services/kisApi';
+import { getStockName } from '../constants/stockUniverse';
 import { GaugeBar } from '../components/common/GaugeBar';
-import { InvestorBar } from '../components/common/InvestorBar';
 
 function StockRow({ code }: { code: string }) {
   const navigation = useNavigation<any>();
@@ -19,8 +19,17 @@ function StockRow({ code }: { code: string }) {
   if (!stock) {
     return (
       <View style={styles.row}>
-        <Text style={styles.code}>{code}</Text>
+        <Text style={styles.name}>{getStockName(code)} ({code})</Text>
         <Text style={styles.placeholder}>로딩 중...</Text>
+      </View>
+    );
+  }
+
+  if ((stock as any).error) {
+    return (
+      <View style={styles.row}>
+        <Text style={styles.name}>{getStockName(code)} ({code})</Text>
+        <Text style={styles.errorText}>{(stock as any).error}</Text>
       </View>
     );
   }
@@ -37,8 +46,8 @@ function StockRow({ code }: { code: string }) {
       }}
     >
       <View style={styles.rowLeft}>
-        <Text style={styles.name}>{stock.name}</Text>
-        <Text style={styles.code}>{code} · {stock.market}</Text>
+        <Text style={styles.name}>{stock.name} ({code})</Text>
+        <Text style={styles.code}>{stock.market}</Text>
       </View>
       <View style={styles.rowCenter}>
         <GaugeBar value={stock.tradeStrength} max={200} showValue />
@@ -56,14 +65,24 @@ function StockRow({ code }: { code: string }) {
 export function DashboardScreen() {
   const { watchlist, updateStock } = useStockStore();
   const [refreshing, setRefreshing] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
 
   const loadAll = async () => {
-    await Promise.all(
-      watchlist.map(async (code) => {
-        const data = await kisApi.getScreenerData(code);
-        updateStock(code, data);
-      })
-    );
+    setError(null);
+    try {
+      await Promise.all(
+        watchlist.map(async (code) => {
+          try {
+            const data = await kisApi.getScreenerData(code);
+            updateStock(code, data);
+          } catch (e: any) {
+            updateStock(code, { error: e?.message ?? '불러오기 실패' } as any);
+          }
+        })
+      );
+    } catch (e: any) {
+      setError(e?.message ?? '데이터 로드 실패');
+    }
   };
 
   useEffect(() => { loadAll(); }, []);
@@ -80,6 +99,11 @@ export function DashboardScreen() {
         <Text style={styles.title}>대시보드</Text>
         <Text style={styles.subtitle}>{watchlist.length}개 관심 종목</Text>
       </View>
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorBannerText}>{error}</Text>
+        </View>
+      )}
       <FlatList
         data={watchlist}
         keyExtractor={(c) => c}
@@ -103,6 +127,16 @@ const styles = StyleSheet.create({
   },
   title: { color: colors.text, fontSize: 22, fontWeight: '800' },
   subtitle: { color: colors.text3, fontSize: 13 },
+  errorBanner: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    padding: 12,
+    backgroundColor: colors.down + '22',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.down,
+  },
+  errorBannerText: { color: colors.down, fontSize: 13 },
   list: { paddingBottom: 24 },
   row: {
     flexDirection: 'row',
@@ -121,4 +155,5 @@ const styles = StyleSheet.create({
   change: { fontSize: 12, marginTop: 2 },
   sep: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
   placeholder: { color: colors.text3, fontSize: 12 },
+  errorText: { color: colors.down, fontSize: 11, flex: 1, marginLeft: 8 },
 });

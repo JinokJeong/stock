@@ -9,6 +9,7 @@ interface Props {
   downloadProgress: number;
   errorMessage: string | null;
   onRetry: () => void;
+  onDownload: () => void;
 }
 
 const STATUS_LABEL: Record<LlmStatus, string> = {
@@ -20,13 +21,22 @@ const STATUS_LABEL: Record<LlmStatus, string> = {
   error: '오류 발생',
 };
 
-export function ModelDownloader({ status, downloadProgress, errorMessage, onRetry }: Props) {
+export function ModelDownloader({ status, downloadProgress, errorMessage, onRetry, onDownload }: Props) {
   if (status === 'ready') return null;
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>AI 분석 엔진</Text>
-      <Text style={styles.subtitle}>온디바이스 LLM (Gemma 3 1B)</Text>
+      <Text style={styles.subtitle}>온디바이스 LLM (Gemma 3 1B · ~800MB)</Text>
+
+      {status === 'idle' && (
+        <>
+          <Text style={styles.hint}>Wi-Fi 연결 후 다운로드하세요</Text>
+          <TouchableOpacity style={styles.downloadBtn} onPress={onDownload}>
+            <Text style={styles.retryText}>AI 모델 다운로드</Text>
+          </TouchableOpacity>
+        </>
+      )}
 
       {status === 'downloading' && (
         <>
@@ -34,7 +44,7 @@ export function ModelDownloader({ status, downloadProgress, errorMessage, onRetr
             <View style={[styles.progressFill, { width: `${Math.round(downloadProgress * 100)}%` }]} />
           </View>
           <Text style={styles.pctText}>{Math.round(downloadProgress * 100)}% · ~800MB</Text>
-          <Text style={styles.hint}>Wi-Fi 연결 권장</Text>
+          <Text style={styles.hint}>Wi-Fi 연결 권장 · 앱을 닫지 마세요</Text>
         </>
       )}
 
@@ -42,7 +52,9 @@ export function ModelDownloader({ status, downloadProgress, errorMessage, onRetr
         <ActivityIndicator color={colors.accent} size="large" style={styles.spinner} />
       )}
 
-      <Text style={styles.label}>{STATUS_LABEL[status]}</Text>
+      {status !== 'idle' && (
+        <Text style={styles.label}>{STATUS_LABEL[status]}</Text>
+      )}
 
       {status === 'error' && (
         <>
@@ -114,6 +126,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 8,
     textAlign: 'center',
+  },
+  downloadBtn: {
+    marginTop: 12,
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    backgroundColor: colors.accent,
+    borderRadius: 8,
   },
   retryBtn: {
     marginTop: 12,

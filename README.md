@@ -134,8 +134,8 @@ src/
 
 | 항목 | 내용 |
 |------|------|
-| 모델 | Gemma 3 1B IT Q4_K_M (GGUF) |
-| 크기 | ~800MB (앱 번들 미포함, 첫 실행 시 Wi-Fi 다운로드) |
+| 모델 | Qwen2.5 0.5B Instruct Q4_K_M (GGUF) |
+| 크기 | ~380MB (앱 번들 미포함, 설정 화면에서 Wi-Fi 다운로드) |
 | 추론 속도 | 5~15 토큰/초 (RAM 4GB 이상 권장) |
 | 역할 | 뉴스 감성 분석 → `{sentiment, urgency, summary}` JSON 출력 |
 |      | 종목 AI 코멘트 → 한 문장 자연어 생성 |
@@ -203,7 +203,7 @@ npx expo run:android
 | 영역 | 라이브러리 |
 |------|-----------|
 | 프레임워크 | React Native 0.81 · Expo 54 |
-| AI 추론 | llama.rn 0.12 · Gemma 3 1B GGUF |
+| AI 추론 | llama.rn 0.12 · Qwen2.5 0.5B Instruct GGUF |
 | 상태 관리 | Zustand 5 |
 | 네비게이션 | React Navigation 7 (Stack + BottomTab) |
 | 알림 | @notifee/react-native 9 |
