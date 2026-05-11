@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
-import { kisApi, isKoreanMarketOpen, isPreMarket } from '../services/kisApi';
+import { kisApi, isKoreanMarketOpen, isPreMarket, CandleData } from '../services/kisApi';
 import { generateStockComment } from '../services/llmService';
 import { useLlmStore } from '../store/llmStore';
 import { CandleChart } from '../components/chart/CandleChart';
@@ -29,12 +29,16 @@ export function StockDetailScreen() {
   const [comment, setComment] = useState('');
   const [commentLoading, setCommentLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [candles, setCandles] = useState<CandleData[]>([]);
 
   useEffect(() => {
     setLoadError(null);
     kisApi.getScreenerData(code)
       .then((data) => updateStock(code, data))
       .catch((e: any) => setLoadError(e?.message ?? '데이터 로드 실패'));
+    kisApi.getCandles(code)
+      .then(setCandles)
+      .catch(() => {});
   }, [code]);
 
   useEffect(() => {
@@ -123,7 +127,7 @@ export function StockDetailScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* 캔들차트 */}
         <View style={styles.section}>
-          <CandleChart />
+          <CandleChart candles={candles} currentPrice={stock.price} />
         </View>
 
         {/* KPI 행 */}

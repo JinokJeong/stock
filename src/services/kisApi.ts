@@ -6,10 +6,18 @@ import { StockData, StockFinancial, StockScreenData } from '../types/stock';
 import { getStockName, KOSPI200 } from '../constants/stockUniverse';
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
-const TOKEN_CACHE_KEY = 'KIS_ACCESS_TOKEN';
-const TOKEN_EXP_KEY   = 'KIS_TOKEN_EXPIRES_AT';
-const FIN_CACHE_PFX   = 'KIS_FIN_';
-const VOL_CACHE_PFX   = 'KIS_VOL_';
+const TOKEN_CACHE_KEY  = 'KIS_ACCESS_TOKEN';
+const TOKEN_EXP_KEY    = 'KIS_TOKEN_EXPIRES_AT';
+const FIN_CACHE_PFX    = 'KIS_FIN_';
+const DAILY_CACHE_PFX  = 'KIS_DAILY_';
+
+export interface CandleData {
+  date: string;   // MM-DD
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
 
 const KOSPI200_SET = new Set(KOSPI200);
 
@@ -241,31 +249,33 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
   return fin;
 }
 
-// ─── 20일 평균 거래량 (FHKST01010400) — 일 1회 캐시 ─────────────────────────
+// ─── 일별 시세 (FHKST01010400) — 캔들 + 20일 평균거래량, 일 1회 캐시 ──────────
 
-async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<number> {
+async function fetchDailyData(
+  code: string, client: AxiosInstance,
+): Promise<{ avgVol20: number; candles: CandleData[] }> {
   const today    = new Date().toISOString().slice(0, 10);
-  const cacheKey = `${VOL_CACHE_PFX}${code}`;
+  const cacheKey = `${DAILY_CACHE_PFX}${code}`;
   try {
     const cached = await AsyncStorage.getItem(cacheKey);
     if (cached) {
       const p = JSON.parse(cached);
-      if (p.date === today) return p.avgVol;
+      if (p.date === today) return { avgVol20: p.avgVol20, candles: p.candles };
     }
   } catch {}
 
   const toDate   = today.replace(/-/g, '');
   const fromDate = (() => {
     const d = new Date();
-    d.setDate(d.getDate() - 30);
+    d.setDate(d.getDate() - 60);
     return d.toISOString().slice(0, 10).replace(/-/g, '');
   })();
 
-  const mktCode2 = KOSPI200_SET.has(code) ? 'J' : 'Q';
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
   const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-daily-price', {
     headers: { tr_id: 'FHKST01010400' },
     params: {
-      FID_COND_MRKT_DIV_CODE: mktCode2,
+      FID_COND_MRKT_DIV_CODE: mktCode,
       FID_INPUT_ISCD: code,
       FID_INPUT_DATE_1: fromDate,
       FID_INPUT_DATE_2: toDate,
@@ -273,12 +283,22 @@ async function fetchAvgVolume20(code: string, client: AxiosInstance): Promise<nu
       FID_ORG_ADJ_PRC: '1',
     },
   }));
-  if (res.data.rt_cd !== '0') return 0;
+  if (res.data.rt_cd !== '0') return { avgVol20: 0, candles: [] };
+
   const rows: any[] = res.data.output ?? [];
+  const candles: CandleData[] = rows.slice(0, 30).reverse().map((r: any) => ({
+    date:  `${r.stck_bsop_date?.slice(4, 6)}-${r.stck_bsop_date?.slice(6, 8)}`,
+    open:  parseInt(r.stck_oprc, 10) || 0,
+    high:  parseInt(r.stck_hgpr, 10) || 0,
+    low:   parseInt(r.stck_lwpr, 10) || 0,
+    close: parseInt(r.stck_clpr, 10) || 0,
+  })).filter((c) => c.close > 0);
+
   const vols = rows.slice(0, 20).map((r: any) => parseInt(r.acml_vol, 10) || 0).filter(Boolean);
-  const avgVol = vols.length > 0 ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 0;
-  await AsyncStorage.setItem(cacheKey, JSON.stringify({ date: today, avgVol }));
-  return avgVol;
+  const avgVol20 = vols.length > 0 ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 0;
+
+  await AsyncStorage.setItem(cacheKey, JSON.stringify({ date: today, avgVol20, candles }));
+  return { avgVol20, candles };
 }
 
 // ─── 지수 (KOSPI + 업종) — 세션 캐시 ────────────────────────────────────────
@@ -358,11 +378,11 @@ export async function getScreenerData(code: string): Promise<StockScreenData> {
   };
 
   // rateGet이 전역 큐로 속도 제한 — 여기서는 순서 보장만
-  const [priceData, investorData, financialData, avgVol20, kospiChg] = await Promise.all([
+  const [priceData, investorData, financialData, dailyData, kospiChg] = await Promise.all([
     wrap('현재가', () => fetchPrice(code, client)),
     wrap('투자자', () => fetchInvestor(code, client)),
     wrap('재무',   () => fetchFinancial(code, client)),
-    wrap('거래량', () => fetchAvgVolume20(code, client)),
+    wrap('거래량', () => fetchDailyData(code, client)),
     wrap('지수',   () => fetchKospiChange(client)),
   ]);
 
@@ -379,7 +399,7 @@ export async function getScreenerData(code: string): Promise<StockScreenData> {
     pfcr:       undefined,
     fcfPerShare: undefined,
     ...sectorAvg,
-    avgVolume20:       avgVol20,
+    avgVolume20:       dailyData.avgVol20,
     sectorChangeRate:  sectorIdx.changeRate,
     sectorChange:      sectorIdx.changeRate,
     sector5dayChange:  sectorIdx.change5day,
@@ -388,8 +408,15 @@ export async function getScreenerData(code: string): Promise<StockScreenData> {
   } as StockScreenData;
 }
 
+export async function getCandles(code: string): Promise<CandleData[]> {
+  const client = await getClient();
+  const { candles } = await fetchDailyData(code, client);
+  return candles;
+}
+
 export const kisApi = {
   getStockPrice,
   getScreenerData,
+  getCandles,
   resetClient,
 };
