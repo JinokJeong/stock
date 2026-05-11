@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
-import { kisApi, isKoreanMarketOpen } from '../services/kisApi';
+import { kisApi, isKoreanMarketOpen, isPreMarket } from '../services/kisApi';
 import { generateStockComment } from '../services/llmService';
 import { useLlmStore } from '../store/llmStore';
 import { CandleChart } from '../components/chart/CandleChart';
@@ -66,10 +66,13 @@ export function StockDetailScreen() {
     );
   }
 
-  const changeColor = stock.changeRate >= 0 ? colors.up : colors.down;
-  const marketOpen  = isKoreanMarketOpen();
-  const hasAfterHours = !marketOpen && !!stock.afterHoursPrice;
+  const changeColor   = stock.changeRate >= 0 ? colors.up : colors.down;
+  const marketOpen    = isKoreanMarketOpen();
+  const preMarket     = isPreMarket();
+  const hasAfterHours = !marketOpen && !preMarket && !!stock.afterHoursPrice;
+  const hasPreMarket  = preMarket && !!stock.preMarketPrice;
   const ahColor = (stock.afterHoursChangeRate ?? 0) >= 0 ? colors.up : colors.down;
+  const pmColor = (stock.preMarketChangeRate  ?? 0) >= 0 ? colors.up : colors.down;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -99,6 +102,18 @@ export function StockDetailScreen() {
               <Text style={[styles.ahChange, { color: ahColor }]}>
                 {(stock.afterHoursChangeRate ?? 0) >= 0 ? '+' : ''}
                 {stock.afterHoursChangeRate?.toFixed(2)}%
+              </Text>
+            </View>
+          )}
+          {hasPreMarket && (
+            <View style={styles.ahRow}>
+              <Text style={styles.ahLabel}>장전</Text>
+              <Text style={[styles.ahPrice, { color: pmColor }]}>
+                {stock.preMarketPrice?.toLocaleString()}
+              </Text>
+              <Text style={[styles.ahChange, { color: pmColor }]}>
+                {(stock.preMarketChangeRate ?? 0) >= 0 ? '+' : ''}
+                {stock.preMarketChangeRate?.toFixed(2)}%
               </Text>
             </View>
           )}

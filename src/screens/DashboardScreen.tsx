@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
-import { kisApi, isKoreanMarketOpen } from '../services/kisApi';
+import { kisApi, isKoreanMarketOpen, isPreMarket } from '../services/kisApi';
 import { getStockName } from '../constants/stockUniverse';
 import { GaugeBar } from '../components/common/GaugeBar';
 
@@ -36,8 +36,11 @@ function StockRow({ code }: { code: string }) {
 
   const changeColor   = stock.changeRate >= 0 ? colors.up : colors.down;
   const marketOpen    = isKoreanMarketOpen();
-  const hasAfterHours = !marketOpen && !!stock.afterHoursPrice;
+  const preMarket     = isPreMarket();
+  const hasAfterHours = !marketOpen && !preMarket && !!stock.afterHoursPrice;
+  const hasPreMarket  = preMarket && !!stock.preMarketPrice;
   const ahColor       = (stock.afterHoursChangeRate ?? 0) >= 0 ? colors.up : colors.down;
+  const pmColor       = (stock.preMarketChangeRate  ?? 0) >= 0 ? colors.up : colors.down;
 
   return (
     <TouchableOpacity
@@ -67,6 +70,12 @@ function StockRow({ code }: { code: string }) {
           <Text style={[styles.afterHours, { color: ahColor }]}>
             시간외 {stock.afterHoursPrice?.toLocaleString()}
             {'  '}{(stock.afterHoursChangeRate ?? 0) >= 0 ? '+' : ''}{stock.afterHoursChangeRate?.toFixed(2)}%
+          </Text>
+        )}
+        {hasPreMarket && (
+          <Text style={[styles.afterHours, { color: pmColor }]}>
+            장전 {stock.preMarketPrice?.toLocaleString()}
+            {'  '}{(stock.preMarketChangeRate ?? 0) >= 0 ? '+' : ''}{stock.preMarketChangeRate?.toFixed(2)}%
           </Text>
         )}
       </View>
