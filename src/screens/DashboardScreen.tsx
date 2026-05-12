@@ -9,7 +9,6 @@ import { colors } from '../theme/colors';
 import { useStockStore } from '../store/stockStore';
 import { kisApi, isKoreanMarketOpen, isPreMarket } from '../services/kisApi';
 import { getStockName } from '../constants/stockUniverse';
-import { GaugeBar } from '../components/common/GaugeBar';
 
 function StockRow({ code }: { code: string }) {
   const navigation = useNavigation<any>();
@@ -56,7 +55,27 @@ function StockRow({ code }: { code: string }) {
         <Text style={styles.code}>{stock.market}</Text>
       </View>
       <View style={styles.rowCenter}>
-        <GaugeBar value={stock.tradeStrength} max={200} showValue />
+        <View style={styles.changeBarRow}>
+          <View style={styles.halfTrack}>
+            {stock.changeRate < 0 && (
+              <View style={[styles.halfFill, {
+                width: `${Math.min(Math.abs(stock.changeRate) / 10 * 100, 100)}%`,
+                backgroundColor: colors.down,
+                alignSelf: 'flex-end',
+              }]} />
+            )}
+          </View>
+          <View style={styles.centerTick} />
+          <View style={styles.halfTrack}>
+            {stock.changeRate >= 0 && (
+              <View style={[styles.halfFill, {
+                width: `${Math.min(Math.abs(stock.changeRate) / 10 * 100, 100)}%`,
+                backgroundColor: colors.up,
+                alignSelf: 'flex-start',
+              }]} />
+            )}
+          </View>
+        </View>
       </View>
       <View style={styles.rowRight}>
         <View style={styles.priceRow}>
@@ -173,6 +192,15 @@ const styles = StyleSheet.create({
   sep: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
   placeholder: { color: colors.text3, fontSize: 12 },
   errorText: { color: colors.down, fontSize: 11, flex: 1, marginLeft: 8 },
+  changeBarRow: { flexDirection: 'row', alignItems: 'center', width: '100%' },
+  halfTrack: {
+    flex: 1, height: 6,
+    backgroundColor: colors.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  halfFill: { height: '100%', borderRadius: 3 },
+  centerTick: { width: 1, height: 10, backgroundColor: colors.border2, marginHorizontal: 1 },
   priceRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   closeBadge: {
     fontSize: 9, color: colors.text3,
