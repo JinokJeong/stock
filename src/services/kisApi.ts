@@ -8,7 +8,7 @@ import { getStockName, KOSPI200 } from '../constants/stockUniverse';
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const TOKEN_CACHE_KEY  = 'KIS_ACCESS_TOKEN';
 const TOKEN_EXP_KEY    = 'KIS_TOKEN_EXPIRES_AT';
-const FIN_CACHE_PFX    = 'KIS_FIN_';
+const FIN_CACHE_PFX    = 'KIS_FIN2_';
 const DAILY_CACHE_PFX  = 'KIS_DAILY_';
 
 export interface CandleData {
@@ -240,9 +240,9 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
   const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
   const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/finance/financial-ratio', {
     headers: { tr_id: 'FHKST66430300' },
-    params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code, FID_PERIOD_DIV_CODE: 'Y' },
+    params: { FID_DIV_CLS_CODE: '1', FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
   }));
-  if (res.data.rt_cd !== '0') return { code, updatedAt: today }; // 재무 없는 종목은 빈값으로
+  if (res.data.rt_cd !== '0') return { code, updatedAt: today };
   const d = res.data.output?.[0] ?? {};
   const fin: Partial<StockFinancial> = {
     code,
