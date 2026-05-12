@@ -414,9 +414,135 @@ export async function getCandles(code: string): Promise<CandleData[]> {
   return candles;
 }
 
+// ─── 차트용 기간별 캔들 ───────────────────────────────────────────────────────
+
+export type ChartPeriod = '30m' | 'D' | 'W' | 'M' | 'Y';
+
+export interface ChartCandle {
+  time: string | number;  // 'YYYY-MM-DD' (D/W/M/Y) | unix_ts_seconds (30m)
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+async function fetchPeriodCandles(
+  code: string,
+  period: 'D' | 'W' | 'M',
+  client: AxiosInstance,
+): Promise<ChartCandle[]> {
+  const today    = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const daysBack = period === 'D' ? 200 : period === 'W' ? 1100 : 3650;
+  const from     = new Date(Date.now() - daysBack * 86400000)
+    .toISOString().slice(0, 10).replace(/-/g, '');
+
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
+  const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-daily-price', {
+    headers: { tr_id: 'FHKST01010400' },
+    params: {
+      FID_COND_MRKT_DIV_CODE: mktCode,
+      FID_INPUT_ISCD:         code,
+      FID_INPUT_DATE_1:       from,
+      FID_INPUT_DATE_2:       today,
+      FID_PERIOD_DIV_CODE:    period,
+      FID_ORG_ADJ_PRC:        '1',
+    },
+  }));
+  if (res.data.rt_cd !== '0') return [];
+  const rows: any[] = res.data.output ?? [];
+  return rows.reverse().map((r: any) => {
+    const d = r.stck_bsop_date as string;
+    return {
+      time:   `${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`,
+      open:   parseInt(r.stck_oprc, 10) || 0,
+      high:   parseInt(r.stck_hgpr, 10) || 0,
+      low:    parseInt(r.stck_lwpr, 10) || 0,
+      close:  parseInt(r.stck_clpr, 10) || 0,
+      volume: parseInt(r.acml_vol,  10) || 0,
+    };
+  }).filter(c => c.close > 0);
+}
+
+async function fetchMinuteCandles(code: string, client: AxiosInstance): Promise<ChartCandle[]> {
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
+  const allRows: any[] = [];
+
+  // 당일 전체 분봉: 16:00→ 역순으로 5페이지 (페이지당 30건, 약 150분)
+  for (const hour of ['160000', '143000', '120000', '103000', '090000']) {
+    try {
+      const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice', {
+        headers: { tr_id: 'FHKST03010200' },
+        params: {
+          FID_ETC_CLS_CODE:       '',
+          FID_COND_MRKT_DIV_CODE: mktCode,
+          FID_INPUT_ISCD:         code,
+          FID_INPUT_HOUR_1:       hour,
+          FID_PW_DATA_INCU_YN:    'N',
+        },
+      }));
+      if (res.data.rt_cd !== '0') continue;
+      allRows.push(...(res.data.output2 ?? []));
+    } catch { /* skip failed page */ }
+  }
+
+  // 중복 제거 + 정렬
+  const seen = new Set<string>();
+  const sorted = allRows
+    .filter((r: any) => {
+      const key = `${r.stck_bsop_date}${r.stck_cntg_hour}`;
+      if (seen.has(key) || !(parseInt(r.stck_prpr, 10) > 0)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a: any, b: any) =>
+      `${a.stck_bsop_date}${a.stck_cntg_hour}`.localeCompare(`${b.stck_bsop_date}${b.stck_cntg_hour}`)
+    );
+
+  // 30분 버킷 집계
+  const buckets = new Map<number, ChartCandle>();
+  for (const r of sorted) {
+    const ds  = r.stck_bsop_date as string;
+    const ts  = r.stck_cntg_hour as string;
+    const hh  = parseInt(ts.slice(0, 2), 10);
+    const mm  = parseInt(ts.slice(2, 4), 10);
+    const b30 = Math.floor(mm / 30) * 30;
+    // KST 시각을 UTC로 표기 (차트에서 KST 시각 그대로 보이도록 9시간 더함)
+    const unixTs = Math.floor(Date.UTC(
+      parseInt(ds.slice(0,4),10), parseInt(ds.slice(4,6),10)-1, parseInt(ds.slice(6,8),10),
+      hh, b30,
+    ) / 1000) + 9 * 3600;
+
+    const close = parseInt(r.stck_prpr, 10) || 0;
+    const high  = parseInt(r.stck_hgpr, 10) || 0;
+    const low   = parseInt(r.stck_lwpr, 10) || 0;
+    const open  = parseInt(r.stck_oprc, 10) || 0;
+    const vol   = parseInt(r.cntg_vol,  10) || 0;
+
+    if (!buckets.has(unixTs)) {
+      buckets.set(unixTs, { time: unixTs, open, high, low, close, volume: vol });
+    } else {
+      const b = buckets.get(unixTs)!;
+      b.high   = Math.max(b.high, high);
+      b.low    = Math.min(b.low, low);
+      b.close  = close;
+      b.volume += vol;
+    }
+  }
+  return [...buckets.values()].sort((a, b) => (a.time as number) - (b.time as number));
+}
+
+export async function getCandlesForChart(code: string, period: ChartPeriod): Promise<ChartCandle[]> {
+  const client = await getClient();
+  if (period === '30m') return fetchMinuteCandles(code, client);
+  const p = period === 'Y' ? 'M' : (period as 'D' | 'W' | 'M');
+  return fetchPeriodCandles(code, p, client);
+}
+
 export const kisApi = {
   getStockPrice,
   getScreenerData,
   getCandles,
+  getCandlesForChart,
   resetClient,
 };
