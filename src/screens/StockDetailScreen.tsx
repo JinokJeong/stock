@@ -124,7 +124,7 @@ export function StockDetailScreen() {
         {/* 캔들차트 */}
         <TradingChart code={code} height={440} />
 
-        {/* KPI 행 */}
+        {/* KPI 행 — 시세 */}
         <View style={styles.kpiRow}>
           <KpiCard
             label="체결강도"
@@ -139,6 +139,28 @@ export function StockDetailScreen() {
             label="외국인"
             value={stock.foreignConsecutiveDays >= 0 ? `+${stock.foreignConsecutiveDays}일` : `${stock.foreignConsecutiveDays}일`}
             valueColor={stock.foreignConsecutiveDays > 0 ? colors.buy : colors.down}
+          />
+        </View>
+
+        {/* KPI 행 — 밸류에이션 */}
+        <View style={styles.kpiRow}>
+          <KpiCard
+            label="PER"
+            value={stock.per != null ? `${stock.per.toFixed(1)}배` : '-'}
+            valueColor={stock.per != null && stock.perSector != null
+              ? stock.per < stock.perSector ? colors.up : colors.text
+              : colors.text}
+          />
+          <KpiCard
+            label="PBR"
+            value={stock.pbr != null ? `${stock.pbr.toFixed(2)}배` : '-'}
+            valueColor={stock.pbr != null && stock.pbrSector != null
+              ? stock.pbr < stock.pbrSector ? colors.up : colors.text
+              : colors.text}
+          />
+          <KpiCard
+            label="PCR"
+            value={stock.pcr != null ? `${stock.pcr.toFixed(1)}배` : '-'}
           />
         </View>
 

@@ -29,25 +29,29 @@ export interface StockFinancial {
   code: string;
   per: number;
   pbr: number;
-  pfcr: number;     // Price / Free Cash flow Ratio
+  pcr: number;      // Price / Cash flow Ratio
+  pfcr: number;     // Price / Free Cash flow Ratio (legacy)
   eps: number;
   bps: number;
   fcfPerShare: number;
   perSector: number;
   pbrSector: number;
+  pcrSector: number;
   pfcrSector: number;
-  updatedAt: string; // ISO date, 하루 캐시 키
+  updatedAt: string;
 }
 
 export interface StockData extends StockPrice, StockInvestor {
   per?: number;
   pbr?: number;
-  pfcr?: number;
+  pcr?: number;     // Price / Cash flow Ratio
+  pfcr?: number;    // Price / Free Cash flow Ratio (legacy)
   eps?: number;
   bps?: number;
   fcfPerShare?: number;
   perSector?: number;
   pbrSector?: number;
+  pcrSector?: number;
   pfcrSector?: number;
   updatedAt?: string;
   avgVolume20: number;
