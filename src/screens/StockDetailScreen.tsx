@@ -128,7 +128,7 @@ export function StockDetailScreen() {
         <View style={styles.kpiRow}>
           <KpiCard
             label="체결강도"
-            value={stock.tradeStrength?.toFixed(0) ?? '-'}
+            value={stock.tradeStrength > 0 ? stock.tradeStrength.toFixed(0) : '-'}
             valueColor={stock.tradeStrength >= 130 ? colors.up : colors.text}
           />
           <KpiCard
@@ -145,7 +145,10 @@ export function StockDetailScreen() {
         {/* 체결강도 게이지 */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>체결강도</Text>
-          <GaugeBar value={stock.tradeStrength ?? 100} max={200} />
+          {stock.tradeStrength > 0
+            ? <GaugeBar value={stock.tradeStrength} max={200} />
+            : <Text style={styles.noData}>장중에만 집계됩니다</Text>
+          }
         </View>
 
         {/* 밸류에이션 */}
@@ -240,4 +243,5 @@ const styles = StyleSheet.create({
   kpiRow: { flexDirection: 'row', gap: 0 },
   section: { gap: 10 },
   sectionTitle: { color: colors.text2, fontSize: 13, fontWeight: '600' },
+  noData: { color: colors.text3, fontSize: 12, paddingVertical: 4 },
 });

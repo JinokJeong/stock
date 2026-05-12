@@ -136,7 +136,7 @@ async function fetchPrice(code: string, client: AxiosInstance) {
     changeRate:    parseFloat(d.prdy_ctrt)    || 0,
     volume:        parseInt(d.acml_vol, 10)   || 0,
     prevVolume:    parseInt(d.prdy_vol, 10)   || 0,
-    tradeStrength: parseFloat(d.cntr_str)     || 100,
+    tradeStrength: parseFloat(d.cntr_str)     || 0,
     sectorCode:    (d.bstp_cls_code as string) || '',
     sectorName:    (d.bstp_kor_isnm as string)?.trim() || '',
     market: KOSPI200_SET.has(code) ? ('KOSPI' as const) : ('KOSDAQ' as const),
