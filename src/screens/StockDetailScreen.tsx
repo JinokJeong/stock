@@ -187,6 +187,7 @@ export function StockDetailScreen() {
             foreignNet={stock.foreignNetAmount ?? 0}
             institutionNet={stock.institutionNetAmount ?? 0}
             retailNet={stock.retailNetAmount ?? 0}
+            updatedAt={stock.investorUpdatedAt}
           />
         </View>
 

@@ -202,11 +202,17 @@ async function fetchInvestor(code: string, client: AxiosInstance) {
   const fNet0 = parseInt(today.frgn_ntby_qty, 10) || 0;
   const fNet1 = parseInt(yesterday.frgn_ntby_qty, 10) || 0;
 
+  // API 호출 시각 (KST HH:MM)
+  const kst = new Date(Date.now() + 9 * 3_600_000);
+  const hh  = String(kst.getUTCHours()).padStart(2, '0');
+  const mm  = String(kst.getUTCMinutes()).padStart(2, '0');
+  const investorUpdatedAt = `${hh}:${mm}`;
+
   // 단위: 백만원 (million KRW) — 그대로 저장 후 InvestorBar에서 변환
   return {
     foreignNetAmount:     parseInt(today.frgn_ntby_tr_pbmn,  10) || 0,
     institutionNetAmount: parseInt(today.orgn_ntby_tr_pbmn,  10) || 0,
-    retailNetAmount:      parseInt(today.prsn_ntby_tr_pbmn,  10) || 0, // prsn = 개인
+    retailNetAmount:      parseInt(today.prsn_ntby_tr_pbmn,  10) || 0,
     foreignBuyAmount:     parseInt(today.frgn_shnu_tr_pbmn,  10) || 0,
     foreignSellAmount:    parseInt(today.frgn_seln_tr_pbmn,  10) || 0,
     institutionBuyAmount: parseInt(today.orgn_shnu_tr_pbmn,  10) || 0,
@@ -214,6 +220,7 @@ async function fetchInvestor(code: string, client: AxiosInstance) {
     foreignConsecutiveDays,
     institutionConsecutiveDays,
     foreignTurnedPositive: fNet0 > 0 && fNet1 <= 0,
+    investorUpdatedAt,
   };
 }
 

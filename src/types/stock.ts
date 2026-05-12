@@ -22,6 +22,7 @@ export interface StockInvestor {
   foreignConsecutiveDays: number;    // 외국인 연속 순매수 일수 (음수면 순매도)
   institutionConsecutiveDays: number;
   foreignTurnedPositive: boolean;    // 외국인 금일 전환 매수
+  investorUpdatedAt?: string;        // 가집계 시각 HH:MM (KST)
 }
 
 export interface StockFinancial {

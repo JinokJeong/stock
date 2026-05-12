@@ -7,6 +7,7 @@ interface Props {
   foreignNet: number;
   institutionNet: number;
   retailNet: number;
+  updatedAt?: string;  // HH:MM
 }
 
 // val은 백만원 단위 (KIS API 응답 단위)
@@ -34,7 +35,7 @@ function Bar({ label, value, total }: { label: string; value: number; total: num
   );
 }
 
-export function InvestorBar({ foreignNet, institutionNet, retailNet }: Props) {
+export function InvestorBar({ foreignNet, institutionNet, retailNet, updatedAt }: Props) {
   const total = Math.max(
     Math.abs(foreignNet),
     Math.abs(institutionNet),
@@ -44,6 +45,9 @@ export function InvestorBar({ foreignNet, institutionNet, retailNet }: Props) {
 
   return (
     <View style={styles.container}>
+      {updatedAt && (
+        <Text style={styles.timestamp}>{updatedAt} 기준</Text>
+      )}
       <Bar label="외국인" value={foreignNet} total={total} />
       <Bar label="기관" value={institutionNet} total={total} />
       <Bar label="개인" value={retailNet} total={total} />
@@ -53,6 +57,7 @@ export function InvestorBar({ foreignNet, institutionNet, retailNet }: Props) {
 
 const styles = StyleSheet.create({
   container: { gap: 6 },
+  timestamp: { color: colors.text3, fontSize: 10, textAlign: 'right', marginBottom: 2 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   label: { color: colors.text2, fontSize: 11, width: 36 },
   track: {
