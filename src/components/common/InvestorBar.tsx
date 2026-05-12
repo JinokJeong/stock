@@ -36,6 +36,7 @@ function Bar({ label, value, total }: { label: string; value: number; total: num
 }
 
 export function InvestorBar({ foreignNet, institutionNet, retailNet, updatedAt }: Props) {
+  const hasData = foreignNet !== 0 || institutionNet !== 0 || retailNet !== 0;
   const total = Math.max(
     Math.abs(foreignNet),
     Math.abs(institutionNet),
@@ -45,19 +46,28 @@ export function InvestorBar({ foreignNet, institutionNet, retailNet, updatedAt }
 
   return (
     <View style={styles.container}>
-      {updatedAt && (
-        <Text style={styles.timestamp}>{updatedAt} 기준</Text>
+      <Text style={styles.timestamp}>
+        {updatedAt ? `${updatedAt} 기준` : ''}
+      </Text>
+      {hasData ? (
+        <>
+          <Bar label="외국인" value={foreignNet} total={total} />
+          <Bar label="기관" value={institutionNet} total={total} />
+          <Bar label="개인" value={retailNet} total={total} />
+        </>
+      ) : (
+        <Text style={styles.noData}>
+          {updatedAt ? '해당 시각 집계 데이터 없음' : '데이터 없음'}
+        </Text>
       )}
-      <Bar label="외국인" value={foreignNet} total={total} />
-      <Bar label="기관" value={institutionNet} total={total} />
-      <Bar label="개인" value={retailNet} total={total} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { gap: 6 },
-  timestamp: { color: colors.text3, fontSize: 10, textAlign: 'right', marginBottom: 2 },
+  timestamp: { color: colors.text3, fontSize: 10, textAlign: 'right', marginBottom: 2, minHeight: 14 },
+  noData: { color: colors.text3, fontSize: 12, textAlign: 'center', paddingVertical: 8 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   label: { color: colors.text2, fontSize: 11, width: 36 },
   track: {
