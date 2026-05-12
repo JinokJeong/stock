@@ -8,9 +8,9 @@ export const colors = {
   text:    '#dde4f0',
   text2:   '#7a8ba0',
   text3:   '#3d4e62',
-  up:      '#00d68f',
-  down:    '#f0485e',
-  buy:     '#4080ff',
+  up:      '#ef4444',
+  down:    '#3b82f6',
+  buy:     '#ef4444',
   accent:  '#8b7fff',
   amber:   '#f0a020',
 } as const;
