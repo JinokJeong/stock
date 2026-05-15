@@ -9,7 +9,7 @@
 
 | 탭 | 기능 |
 |----|------|
-| 대시보드 | 관심 종목 실시간 체결강도 · 투자자별 가집계 · PER/PBR/P/FCR 밸류에이션 |
+| 대시보드 | 관심 종목 추가/삭제(전종목 검색) · 실시간 시세 · PER/PBR/ROE/PCR/P·FCR 밸류에이션 |
 | 추천 종목 | 코스피200 + 코스닥150 전체 스캔 → 수급·밸류·모멘텀 복합 스코어 순 정렬 |
 | 테마 감지 | 업종 지수 z-score + LLM 뉴스 감성 결합 → 테마 등급(관심/주목/급부상/과열) |
 | 알림 빌더 | 7가지 프리셋 + AND/OR 직접 조합 → 로컬 푸시 알림 |
@@ -19,24 +19,100 @@
 
 ## 아키텍처
 
-```
-┌──────────────────────────────────────────┐
-│           Android App (React Native)     │
-│                                          │
-│  ┌─────────────┐   ┌──────────────────┐ │
-│  │  KIS API    │   │  On-Device LLM   │ │
-│  │  REST / WS  │   │  llama.rn        │ │
-│  └─────────────┘   │  Gemma 3 1B GGUF │ │
-│                    └──────────────────┘ │
-│  ┌─────────────┐   ┌──────────────────┐ │
-│  │  DART API   │   │  로컬 알림       │ │
-│  │  뉴스 수집  │   │  @notifee        │ │
-│  └─────────────┘   └──────────────────┘ │
-│                                          │
-│  Zustand (전역 상태)                     │
-│  AsyncStorage (재무지표·히스토리 캐시)   │
-│  expo-secure-store (API 키 암호화)       │
-└──────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    classDef screen  fill:#0d2137,stroke:#4a9eff,color:#cce4ff
+    classDef service fill:#0d2b10,stroke:#3dba5a,color:#c8f0d0
+    classDef store   fill:#2b1d08,stroke:#e0953a,color:#ffe5c0
+    classDef ext     fill:#2b0c0c,stroke:#e05050,color:#ffd0d0
+    classDef cache   fill:#1c0d2b,stroke:#b07ade,color:#e8d4ff
+    classDef llm     fill:#0d2228,stroke:#3dbba8,color:#c0f0e8
+
+    subgraph EXT["🌐 외부 서비스"]
+        direction LR
+        KR["KIS REST API\n현재가 · 재무지표\n업종지수 · 투자자 · 캔들"]:::ext
+        KW["KIS WebSocket\nws://21000\n실시간 체결"]:::ext
+        DA["DART Open API\n공시 · 뉴스\ncorpCode.xml 전종목"]:::ext
+    end
+
+    subgraph SVC["⚙️ Services"]
+        direction LR
+        kisApi["kisApi.ts\nRate Limiter 200 ms\nAccess Token 자동갱신\nlean 모드 스크리너"]:::service
+        kisWS["kisWebSocket.ts\n실시간 구독\n2회 실패 시 재시도 중단"]:::service
+        dartSvc["dartApi.ts\nfflate ZIP 파싱\n전종목 리스트 7일 캐시"]:::service
+        llmSvc["llmService.ts\nllama.rn 래퍼\n감성분석 · 종목 코멘트"]:::service
+        screener["screenerService.ts\n18건 배치 병렬 스캔\n수급 · 밸류 · 모멘텀 스코어"]:::service
+        alertEng["alertEngine.ts\nAND / OR 조건 판정\n로컬 알림 발송"]:::service
+        themeScorer["themeScorer.ts\n업종 z-score 계산\n테마 등급 산출"]:::service
+    end
+
+    subgraph STORE["📦 Zustand Stores"]
+        direction LR
+        stockSt["stockStore\n관심목록 · 실시간 시세\nAsyncStorage 영속"]:::store
+        screenerSt["screenerStore\n스캔 결과 · 진행률\n프리셋 · 필터 · 정렬"]:::store
+        themeSt["themeStore\n업종 스코어 · 뉴스"]:::store
+        alertSt["alertStore\n알림 조건 목록"]:::store
+        llmSt["llmStore\nLLM 다운로드 · 로드 상태"]:::store
+    end
+
+    subgraph PERSIST["💾 영속 계층"]
+        direction LR
+        AS["AsyncStorage\n재무지표 1일\n캔들 · 20일 평균 1일\ncorpCode 맵 7일\nKIS Token 6 h"]:::cache
+        SS["expo-secure-store\nKIS App Key / Secret\nDART API Key"]:::cache
+    end
+
+    subgraph LLM_BOX["🤖 On-Device LLM (llama.rn)"]
+        LLM["Qwen2.5-0.5B-Instruct\nQ4_K_M GGUF · ~380 MB\n기기 내 추론 · 서버 없음"]:::llm
+    end
+
+    Notifee["📳 @notifee\n로컬 푸시 알림"]:::cache
+
+    subgraph UI["📱 Screens  (BottomTab 5 + Stack Modal)"]
+        direction LR
+        S1["대시보드\n관심목록 추가 · 삭제\n실시간 시세 · 등락바"]:::screen
+        S2["추천 종목\n7 프리셋 · AND/OR 필터\n수급/밸류/모멘텀 스코어"]:::screen
+        S3["테마\n업종 z-score 랭킹\nLLM 감성 뉴스 피드"]:::screen
+        S4["알림 빌더\n조건 편집 · 내 알림"]:::screen
+        S5["설정\nAPI 키 · LLM 다운로드"]:::screen
+        SD["종목 상세 ─ Modal\n캔들차트 · 호가창\nPER/PBR/ROE/PCR/P·FCR\n투자자 가집계 · AI 코멘트"]:::screen
+    end
+
+    %% 외부 → 서비스
+    KR -->|REST| kisApi
+    KW -->|WS 메시지| kisWS
+    DA -->|HTTP ZIP / JSON| dartSvc
+
+    %% 서비스 ↔ 영속
+    kisApi  <-->|캐시 읽기·쓰기| AS
+    kisApi  <-->|API 키 조회| SS
+    dartSvc <-->|corp맵 · 종목 목록| AS
+    dartSvc <-->|API 키 조회| SS
+
+    %% 서비스 → 스토어
+    kisApi  --> stockSt
+    kisWS   --> stockSt
+    dartSvc --> themeSt
+    screener    --> screenerSt
+    themeScorer --> themeSt
+    alertEng    --> alertSt
+    alertEng    --> Notifee
+    llmSvc      --> llmSt
+
+    %% 스크리너 → kisApi (lean 모드)
+    screener -->|getScreenerDataFast\n4건 / 종목| kisApi
+
+    %% LLM
+    llmSvc <--> LLM
+
+    %% 스토어 → 화면
+    stockSt     --> S1
+    stockSt     --> SD
+    screenerSt  --> S2
+    themeSt     --> S3
+    alertSt     --> S4
+    llmSt       --> S5
+    llmSvc      --> SD
+    llmSvc      --> S3
 ```
 
 **서버리스 원칙**: 모든 연산(API 호출, AI 추론, 알림 판정)이 앱 내에서 완결된다.
@@ -134,7 +210,7 @@ src/
 
 | 항목 | 내용 |
 |------|------|
-| 모델 | Qwen2.5 0.5B Instruct Q4_K_M (GGUF) |
+| 모델 | Qwen2.5-0.5B-Instruct Q4_K_M (GGUF) |
 | 크기 | ~380MB (앱 번들 미포함, 설정 화면에서 Wi-Fi 다운로드) |
 | 추론 속도 | 5~15 토큰/초 (RAM 4GB 이상 권장) |
 | 역할 | 뉴스 감성 분석 → `{sentiment, urgency, summary}` JSON 출력 |
