@@ -4,6 +4,7 @@ import { View, Text } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { RecommendScreen } from '../screens/RecommendScreen';
@@ -34,6 +35,9 @@ function TabIcon({ name, focused }: { name: string; focused: boolean }) {
 }
 
 function BottomTabs() {
+  const insets = useSafeAreaInsets();
+  const tabBarHeight = 60 + insets.bottom;
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -42,8 +46,8 @@ function BottomTabs() {
           backgroundColor: colors.bg2,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 60,
-          paddingBottom: 8,
+          height: tabBarHeight,
+          paddingBottom: insets.bottom + 8,
         },
         tabBarActiveTintColor: colors.accent,
         tabBarInactiveTintColor: colors.text3,

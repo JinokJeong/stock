@@ -5,40 +5,65 @@ import { colors } from '../../theme/colors';
 
 interface Props {
   label: string;
-  value: number;
+  value?: number;
   sectorAvg: number;
   unit?: string;
   decimals?: number;
+  invertColor?: boolean;  // true = 높을수록 좋음 (ROE 등)
+  description?: string;
 }
 
-export function ValuationBar({ label, value, sectorAvg, unit = '×', decimals = 2 }: Props) {
+export function ValuationBar({ label, value, sectorAvg, unit = '×', decimals = 2, invertColor = false, description }: Props) {
+  if (value === undefined || value === null) {
+    return (
+      <View style={styles.wrap}>
+        <View style={styles.row}>
+          <Text style={styles.label}>{label}</Text>
+          <View style={[styles.track, { opacity: 0.3 }]}>
+            <View style={styles.midMark} />
+          </View>
+          <Text style={[styles.val, { color: colors.text3 }]}>—</Text>
+          <Text style={styles.sector}>/{sectorAvg.toFixed(decimals)}{unit}</Text>
+        </View>
+        {description ? <Text style={styles.desc}>{description}</Text> : null}
+      </View>
+    );
+  }
+
   const ratio = sectorAvg > 0 ? value / sectorAvg : 1;
-  const barWidth = Math.min(ratio, 2) * 50; // 섹터 평균이 50% 지점
-  const isCheap = ratio < 0.9;
-  const barColor = isCheap ? colors.up : ratio > 1.1 ? colors.down : colors.amber;
+  const barWidth = Math.min(ratio, 2) * 50;
+  const isCheap = invertColor ? ratio > 1.1 : ratio < 0.9;
+  const isExpensive = invertColor ? ratio < 0.9 : ratio > 1.1;
+  const barColor = isCheap ? colors.up : isExpensive ? colors.down : colors.amber;
 
   return (
-    <View style={styles.row}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={styles.track}>
-        <View style={styles.midMark} />
-        <View style={[styles.fill, { width: `${Math.min(barWidth, 100)}%`, backgroundColor: barColor }]} />
+    <View style={styles.wrap}>
+      <View style={styles.row}>
+        <Text style={styles.label}>{label}</Text>
+        <View style={styles.track}>
+          <View style={styles.midMark} />
+          <View style={[styles.fill, { width: `${Math.min(barWidth, 100)}%`, backgroundColor: barColor }]} />
+        </View>
+        <Text style={[styles.val, { color: barColor }]}>
+          {value.toFixed(decimals)}{unit}
+        </Text>
+        <Text style={styles.sector}>
+          /{sectorAvg.toFixed(decimals)}{unit}
+        </Text>
       </View>
-      <Text style={[styles.val, { color: barColor }]}>
-        {value.toFixed(decimals)}{unit}
-      </Text>
-      <Text style={styles.sector}>
-        /{sectorAvg.toFixed(decimals)}{unit}
-      </Text>
+      {description ? <Text style={styles.desc}>{description}</Text> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrap: {
+    marginVertical: 3,
+    gap: 2,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 3,
     gap: 6,
   },
   label: {
@@ -76,5 +101,10 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.text3,
     width: 44,
+  },
+  desc: {
+    fontSize: 10,
+    color: colors.text3,
+    marginLeft: 50,
   },
 });

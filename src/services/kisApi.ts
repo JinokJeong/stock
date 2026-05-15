@@ -4,12 +4,25 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import { StockData, StockFinancial, StockScreenData } from '../types/stock';
 import { getStockName, KOSPI200 } from '../constants/stockUniverse';
+import { fetchCashFlowData } from './dartApi'; // enrichWithDart에서 사용
 
 const KIS_BASE = 'https://openapi.koreainvestment.com:9443';
 const TOKEN_CACHE_KEY  = 'KIS_ACCESS_TOKEN';
 const TOKEN_EXP_KEY    = 'KIS_TOKEN_EXPIRES_AT';
-const FIN_CACHE_PFX    = 'KIS_FIN2_';
+const FIN_CACHE_PFX    = 'KIS_FIN5_';
 const DAILY_CACHE_PFX  = 'KIS_DAILY_';
+
+export interface OrderBookLevel {
+  price: number;
+  qty: number;
+}
+
+export interface OrderBook {
+  asks: OrderBookLevel[];  // high→low (index 0 = highest ask)
+  bids: OrderBookLevel[];  // high→low (index 0 = best bid)
+  totalAskQty: number;
+  totalBidQty: number;
+}
 
 export interface CandleData {
   date: string;   // MM-DD
@@ -83,7 +96,7 @@ export function resetClient() {
 
 // ─── 전역 Rate Limiter — 모든 GET 요청을 큐로 직렬화 ─────────────────────────
 // 600ms 간격 = 초당 최대 1.6건. rate limit 에러 시 1.5초 대기 후 1회 재시도.
-const RATE_MS   = 600;
+const RATE_MS   = 200;
 const RETRY_MS  = 1500;
 let _rateTail: Promise<void> = Promise.resolve();
 
@@ -136,7 +149,8 @@ async function fetchPrice(code: string, client: AxiosInstance) {
     changeRate:    parseFloat(d.prdy_ctrt)    || 0,
     volume:        parseInt(d.acml_vol, 10)   || 0,
     prevVolume:    parseInt(d.prdy_vol, 10)   || 0,
-    tradeStrength: parseFloat(d.cntr_str)     || 0,
+    volTurnover:   parseFloat(d.vol_tnrt)     || 0,
+    netBuyCount:   0,
     sectorCode:    (d.bstp_cls_code as string) || '',
     sectorName:    (d.bstp_kor_isnm as string)?.trim() || '',
     market: KOSPI200_SET.has(code) ? ('KOSPI' as const) : ('KOSDAQ' as const),
@@ -146,6 +160,9 @@ async function fetchPrice(code: string, client: AxiosInstance) {
     preMarketPrice:      pmPrice > 0 ? pmPrice  : undefined,
     preMarketChange:     pmPrice > 0 ? pmChange : undefined,
     preMarketChangeRate: pmPrice > 0 ? pmRate   : undefined,
+    perFromApi:  parseFloat(d.per)  || undefined,
+    pbrFromApi:  parseFloat(d.pbr)  || undefined,
+    lstnStcn:    parseInt(d.lstn_stcn, 10) || 0,
   };
 }
 
@@ -167,7 +184,38 @@ export function isPreMarket(): boolean {
   return min >= 8 * 60 && min < 9 * 60;
 }
 
-// ─── 투자자별 매매 (FHKST01010900) ───────────────────────────────────────────
+// ─── 투자자별 매매 (FHKST01010900 역사 + FHKST03010100 당일 가집계) ───────────
+
+// FHKST03010100: 주식 현재가 투자자 — 당일 누적 거래대금 (장 중 가집계)
+async function fetchTodayInvestorAmounts(code: string, client: AxiosInstance): Promise<{
+  foreignNetAmount: number; institutionNetAmount: number; retailNetAmount: number;
+  foreignNetQty: number; institutionNetQty: number; retailNetQty: number;
+} | null> {
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
+  try {
+    const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-investor', {
+      headers: { tr_id: 'FHKST03010100' },
+      params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
+    }));
+    if (res.data.rt_cd !== '0') return null;
+    const raw = res.data.output1 ?? res.data.output;
+    const d = Array.isArray(raw) ? raw[0] : raw;
+    if (!d) return null;
+    const fAmt = parseInt(d.frgn_ntby_tr_pbmn, 10) || 0;
+    const iAmt = parseInt(d.orgn_ntby_tr_pbmn, 10) || 0;
+    const rAmt = parseInt(d.prsn_ntby_tr_pbmn, 10) || 0;
+    const fQty = parseInt(d.frgn_ntby_qty, 10) || 0;
+    const iQty = parseInt(d.orgn_ntby_qty, 10) || 0;
+    const rQty = parseInt(d.prsn_ntby_qty, 10) || 0;
+    if (fAmt === 0 && iAmt === 0 && rAmt === 0 && fQty === 0 && iQty === 0 && rQty === 0) return null;
+    return {
+      foreignNetAmount: fAmt, institutionNetAmount: iAmt, retailNetAmount: rAmt,
+      foreignNetQty: fQty, institutionNetQty: iQty, retailNetQty: rQty,
+    };
+  } catch {
+    return null;
+  }
+}
 
 async function fetchInvestor(code: string, client: AxiosInstance) {
   const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
@@ -178,50 +226,166 @@ async function fetchInvestor(code: string, client: AxiosInstance) {
   if (res.data.rt_cd !== '0') throw new Error(res.data.msg1 ?? '투자자 조회 실패');
   const rows: any[] = res.data.output ?? [];
 
-  // 외국인 연속 순매수일 계산 (최신 → 과거 순)
-  let foreignConsecutiveDays = 0;
-  let institutionConsecutiveDays = 0;
-  for (const row of rows) {
-    if (parseInt(row.frgn_ntby_qty, 10) > 0) foreignConsecutiveDays++;
-    else break;
-  }
-  for (const row of rows) {
-    if (parseInt(row.orgn_ntby_qty, 10) > 0) institutionConsecutiveDays++;
-    else break;
-  }
-  // 음수 = 연속 순매도
-  let foreignSellDays = 0;
-  for (const row of rows) {
-    if (parseInt(row.frgn_ntby_qty, 10) < 0) foreignSellDays++;
-    else break;
-  }
-  if (foreignSellDays > 0) foreignConsecutiveDays = -foreignSellDays;
+  const histRow0  = rows[0] ?? {};
+  const histRow1  = rows[1] ?? {};
+  const fNet0 = parseInt(histRow0.frgn_ntby_qty, 10) || 0;
+  const fNet1 = parseInt(histRow1.frgn_ntby_qty, 10) || 0;
 
-  const today     = rows[0] ?? {};
-  const yesterday = rows[1] ?? {};
-  const fNet0 = parseInt(today.frgn_ntby_qty, 10) || 0;
-  const fNet1 = parseInt(yesterday.frgn_ntby_qty, 10) || 0;
+  // 전일 확정 금액: 역사 데이터 첫 번째 유효 행
+  const hasAmounts = (r: any) =>
+    (r.frgn_ntby_tr_pbmn !== '' && r.frgn_ntby_tr_pbmn != null) ||
+    (r.orgn_ntby_tr_pbmn !== '' && r.orgn_ntby_tr_pbmn != null) ||
+    (r.prsn_ntby_tr_pbmn !== '' && r.prsn_ntby_tr_pbmn != null);
+  const prevRow    = rows.find(hasAmounts) ?? {};
+  const prevDate   = prevRow.stck_bsop_date ?? '';
 
-  // API 호출 시각 (KST HH:MM)
-  const kst = new Date(Date.now() + 9 * 3_600_000);
-  const hh  = String(kst.getUTCHours()).padStart(2, '0');
-  const mm  = String(kst.getUTCMinutes()).padStart(2, '0');
-  const investorUpdatedAt = `${hh}:${mm}`;
+  // 장 중이면 FHKST03010100으로 오늘 가집계 조회
+  const kstNow  = new Date(Date.now() + 9 * 3_600_000);
+  const hh      = String(kstNow.getUTCHours()).padStart(2, '0');
+  const mm      = String(kstNow.getUTCMinutes()).padStart(2, '0');
+  const todayDate = kstNow.toISOString().slice(0, 10).replace(/-/g, '');
 
-  // 단위: 백만원 (million KRW) — 그대로 저장 후 InvestorBar에서 변환
+  const marketOpen = isKoreanMarketOpen();
+  const todayData  = marketOpen ? await fetchTodayInvestorAmounts(code, client) : null;
+
+  // 연속 순매수일 계산 — 오늘 방향은 todayData 우선, 이후 역사 행으로 카운트
+  const rowSign = (row: any, qtyKey: string, amtKey: string) => {
+    const qty = parseInt(row[qtyKey], 10);
+    if (qty !== 0) return Math.sign(qty);
+    const amt = parseInt(row[amtKey], 10);
+    return Math.sign(amt);
+  };
+  // 오늘 외국인/기관 방향 (todayData 우선, 없으면 histRow0)
+  const todayFSign = todayData
+    ? Math.sign(todayData.foreignNetAmount || todayData.foreignNetQty || 0)
+    : rowSign(histRow0, 'frgn_ntby_qty', 'frgn_ntby_tr_pbmn');
+  const todayISign = todayData
+    ? Math.sign(todayData.institutionNetAmount || todayData.institutionNetQty || 0)
+    : rowSign(histRow0, 'orgn_ntby_qty', 'orgn_ntby_tr_pbmn');
+
+  // 역사 행 중 오늘 행 제외한 나머지로 스트릭 카운트
+  const histPast = histRow0.stck_bsop_date === todayDate ? rows.slice(1) : rows;
+
+  const calcStreak = (todaySign: number, pastRows: any[], qtyKey: string, amtKey: string) => {
+    if (todaySign === 0) return 0;
+    let count = 1;  // 오늘 포함
+    for (const row of pastRows) {
+      if (rowSign(row, qtyKey, amtKey) === todaySign) count++;
+      else break;
+    }
+    return todaySign > 0 ? count : -count;
+  };
+
+  const foreignConsecutiveDays     = calcStreak(todayFSign, histPast, 'frgn_ntby_qty', 'frgn_ntby_tr_pbmn');
+  const institutionConsecutiveDays  = calcStreak(todayISign, histPast, 'orgn_ntby_qty', 'orgn_ntby_tr_pbmn');
+
+  // 당일 데이터 우선 — 없으면 역사 데이터 사용
+  if (todayData) {
+    const hasAmt = todayData.foreignNetAmount !== 0 || todayData.institutionNetAmount !== 0 || todayData.retailNetAmount !== 0;
+    const investorIsEstimated = !hasAmt;  // 금액 미제공이면 qty×price 추정 예정
+    return {
+      foreignNetAmount:       todayData.foreignNetAmount,
+      institutionNetAmount:   todayData.institutionNetAmount,
+      retailNetAmount:        todayData.retailNetAmount,
+      foreignBuyAmount:       0,
+      foreignSellAmount:      0,
+      institutionBuyAmount:   0,
+      institutionSellAmount:  0,
+      foreignConsecutiveDays,
+      institutionConsecutiveDays,
+      foreignTurnedPositive: fNet0 > 0 && fNet1 <= 0,
+      investorUpdatedAt: hasAmt ? `${hh}:${mm}` : `${hh}:${mm} (추정)`,
+      foreignNetQty:       todayData.foreignNetQty,
+      institutionNetQty:   todayData.institutionNetQty,
+      retailNetQty:        todayData.retailNetQty,
+      investorIsEstimated,
+      prevForeignNetAmount:      parseInt(prevRow.frgn_ntby_tr_pbmn, 10) || 0,
+      prevInstitutionNetAmount:  parseInt(prevRow.orgn_ntby_tr_pbmn, 10) || 0,
+      prevRetailNetAmount:       parseInt(prevRow.prsn_ntby_tr_pbmn, 10) || 0,
+      prevInvestorDate: prevDate,
+    };
+  }
+
+  // 역사 데이터 — 오늘 행이 있고 금액도 있으면 사용, 아니면 전일 확정 행 사용
+  const histHasToday = histRow0.stck_bsop_date === todayDate;
+  const todayHasHistAmounts = histHasToday && hasAmounts(histRow0);
+  const baseRow  = todayHasHistAmounts ? histRow0 : prevRow;
+  const baseDate = todayHasHistAmounts ? todayDate : prevDate;
+
+  const foreignNetQty     = parseInt(histRow0.frgn_ntby_qty, 10) || 0;
+  const institutionNetQty = parseInt(histRow0.orgn_ntby_qty, 10) || 0;
+  const retailNetQty      = parseInt(histRow0.prsn_ntby_qty, 10) || 0;
+  const todayHasQty       = foreignNetQty !== 0 || institutionNetQty !== 0 || retailNetQty !== 0;
+
+  let investorUpdatedAt: string;
+  if (histHasToday && hasAmounts(histRow0)) {
+    investorUpdatedAt = `${hh}:${mm}`;
+  } else if (histHasToday && todayHasQty) {
+    investorUpdatedAt = `${hh}:${mm} (추정)`;
+  } else if (baseDate) {
+    investorUpdatedAt = `${baseDate.slice(4, 6)}/${baseDate.slice(6, 8)} 전일`;
+  } else {
+    investorUpdatedAt = `${hh}:${mm}`;
+  }
+
   return {
-    foreignNetAmount:     parseInt(today.frgn_ntby_tr_pbmn,  10) || 0,
-    institutionNetAmount: parseInt(today.orgn_ntby_tr_pbmn,  10) || 0,
-    retailNetAmount:      parseInt(today.prsn_ntby_tr_pbmn,  10) || 0,
-    foreignBuyAmount:     parseInt(today.frgn_shnu_tr_pbmn,  10) || 0,
-    foreignSellAmount:    parseInt(today.frgn_seln_tr_pbmn,  10) || 0,
-    institutionBuyAmount: parseInt(today.orgn_shnu_tr_pbmn,  10) || 0,
-    institutionSellAmount:parseInt(today.orgn_seln_tr_pbmn,  10) || 0,
+    foreignNetAmount:      parseInt(baseRow.frgn_ntby_tr_pbmn,  10) || 0,
+    institutionNetAmount:  parseInt(baseRow.orgn_ntby_tr_pbmn,  10) || 0,
+    retailNetAmount:       parseInt(baseRow.prsn_ntby_tr_pbmn,  10) || 0,
+    foreignBuyAmount:      parseInt(baseRow.frgn_shnu_tr_pbmn,  10) || 0,
+    foreignSellAmount:     parseInt(baseRow.frgn_seln_tr_pbmn,  10) || 0,
+    institutionBuyAmount:  parseInt(baseRow.orgn_shnu_tr_pbmn,  10) || 0,
+    institutionSellAmount: parseInt(baseRow.orgn_seln_tr_pbmn,  10) || 0,
     foreignConsecutiveDays,
     institutionConsecutiveDays,
     foreignTurnedPositive: fNet0 > 0 && fNet1 <= 0,
     investorUpdatedAt,
+    foreignNetQty,
+    institutionNetQty,
+    retailNetQty,
+    investorIsEstimated: histHasToday && todayHasQty && !hasAmounts(histRow0),
+    prevForeignNetAmount:      parseInt(prevRow.frgn_ntby_tr_pbmn, 10) || 0,
+    prevInstitutionNetAmount:  parseInt(prevRow.orgn_ntby_tr_pbmn, 10) || 0,
+    prevRetailNetAmount:       parseInt(prevRow.prsn_ntby_tr_pbmn, 10) || 0,
+    prevInvestorDate: prevDate,
   };
+}
+
+// ─── 수익성비율 (FHKST66430200) — CPS(주당현금흐름) 포함, 일 1회 캐시 ────────────
+
+const PROF_CACHE_PFX = 'KIS_PROF3_';
+
+async function fetchProfitabilityRatios(
+  code: string, client: AxiosInstance,
+): Promise<{ cps?: number; thtrNtin?: number }> {
+  const today    = new Date().toISOString().slice(0, 10);
+  const cacheKey = `${PROF_CACHE_PFX}${code}`;
+  try {
+    const cached = await AsyncStorage.getItem(cacheKey);
+    if (cached) {
+      const p = JSON.parse(cached);
+      if (p.updatedAt === today) return p;
+    }
+  } catch {}
+
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
+  try {
+    const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/finance/financial-ratio', {
+      headers: { tr_id: 'FHKST66430200' },
+      params: { FID_DIV_CLS_CODE: '1', FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
+    }));
+    if (res.data.rt_cd !== '0') return {};
+    const d = res.data.output?.[0] ?? {};
+    const cps = parseFloat(d.cps) || parseFloat(d.cash_ps) || undefined;
+    // thtr_ntin: 당기순이익 (억원) — CPS 직접 데이터 없을 때 PCR 추정에 사용
+    const rawNtin = parseFloat(d.thtr_ntin);
+    const thtrNtin = rawNtin > 0 && rawNtin < 999999 ? rawNtin : undefined;
+    const result = { cps, thtrNtin, updatedAt: today };
+    await AsyncStorage.setItem(cacheKey, JSON.stringify(result));
+    return result;
+  } catch {
+    return {};
+  }
 }
 
 // ─── 재무비율 (FHKST66430300) — 일 1회 캐시 ─────────────────────────────────
@@ -244,13 +408,20 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
   }));
   if (res.data.rt_cd !== '0') return { code, updatedAt: today };
   const d = res.data.output?.[0] ?? {};
+  const per  = parseFloat(d.per)  || undefined;
+  const pcr  = parseFloat(d.pcr)  || undefined;
+  // KIS API: pfcr 필드명이 버전마다 다를 수 있음 — 여러 이름 시도
+  const pfcrRaw = parseFloat(d.pfcr) || parseFloat(d.pfcf) || parseFloat(d.pfcf_ratio) || undefined;
+  const fcfPs   = parseFloat(d.fcf_ps) || parseFloat(d.fcfps) || undefined;
   const fin: Partial<StockFinancial> = {
     code,
-    per:       parseFloat(d.per)  || undefined,
-    pbr:       parseFloat(d.pbr)  || undefined,
-    pcr:       parseFloat(d.pcr)  || undefined,
-    eps:       parseFloat(d.eps)  || undefined,
-    bps:       parseFloat(d.bps)  || undefined,
+    per,
+    pbr:          parseFloat(d.pbr)    || undefined,
+    pcr,
+    pfcr:         pfcrRaw,
+    eps:          parseFloat(d.eps)    || undefined,
+    bps:          parseFloat(d.bps)    || undefined,
+    fcfPerShare:  fcfPs,
     updatedAt: today,
   };
   await AsyncStorage.setItem(cacheKey, JSON.stringify(fin));
@@ -261,14 +432,14 @@ async function fetchFinancial(code: string, client: AxiosInstance): Promise<Part
 
 async function fetchDailyData(
   code: string, client: AxiosInstance,
-): Promise<{ avgVol20: number; candles: CandleData[] }> {
+): Promise<{ avgVol20: number; prevVol: number; candles: CandleData[] }> {
   const today    = new Date().toISOString().slice(0, 10);
   const cacheKey = `${DAILY_CACHE_PFX}${code}`;
   try {
     const cached = await AsyncStorage.getItem(cacheKey);
     if (cached) {
       const p = JSON.parse(cached);
-      if (p.date === today) return { avgVol20: p.avgVol20, candles: p.candles };
+      if (p.date === today && p.prevVol != null) return { avgVol20: p.avgVol20, prevVol: p.prevVol, candles: p.candles };
     }
   } catch {}
 
@@ -291,7 +462,7 @@ async function fetchDailyData(
       FID_ORG_ADJ_PRC: '1',
     },
   }));
-  if (res.data.rt_cd !== '0') return { avgVol20: 0, candles: [] };
+  if (res.data.rt_cd !== '0') return { avgVol20: 0, prevVol: 0, candles: [] };
 
   const rows: any[] = res.data.output ?? [];
   const candles: CandleData[] = rows.slice(0, 30).reverse().map((r: any) => ({
@@ -302,11 +473,13 @@ async function fetchDailyData(
     close: parseInt(r.stck_clpr, 10) || 0,
   })).filter((c) => c.close > 0);
 
-  const vols = rows.slice(0, 20).map((r: any) => parseInt(r.acml_vol, 10) || 0).filter(Boolean);
+  const pastRows = rows[0]?.stck_bsop_date === toDate ? rows.slice(1) : rows;
+  const vols = pastRows.slice(0, 20).map((r: any) => parseInt(r.acml_vol, 10) || 0).filter(Boolean);
   const avgVol20 = vols.length > 0 ? Math.round(vols.reduce((a, b) => a + b, 0) / vols.length) : 0;
+  const prevVol  = parseInt(pastRows[0]?.acml_vol, 10) || 0;
 
-  await AsyncStorage.setItem(cacheKey, JSON.stringify({ date: today, avgVol20, candles }));
-  return { avgVol20, candles };
+  await AsyncStorage.setItem(cacheKey, JSON.stringify({ date: today, avgVol20, prevVol, candles }));
+  return { avgVol20, prevVol, candles };
 }
 
 // ─── 지수 (KOSPI + 업종) — 세션 캐시 ────────────────────────────────────────
@@ -322,20 +495,52 @@ async function fetchKospiChange(client: AxiosInstance): Promise<number> {
   return kospiChangeCache;
 }
 
-async function fetchSectorChange(sectorCode: string, client: AxiosInstance): Promise<{ changeRate: number; change5day: number }> {
-  if (sectorCache[sectorCode]) return sectorCache[sectorCode];
-  if (!sectorCode) return { changeRate: 0, change5day: 0 };
+const SECTOR_NAME_TO_CODE: Array<[string, string]> = [
+  ['전기전자', '0014'], ['전기·전자', '0014'],
+  ['운수장비', '0016'], ['운송장비', '0016'],
+  ['화학',     '0009'],
+  ['의약품',   '0010'], ['제약',     '0010'], ['바이오', '0010'],
+  ['철강금속', '0012'], ['철강',     '0012'],
+  ['기계',     '0013'],
+  ['음식료',   '0006'],
+  ['섬유의복', '0007'],
+  ['종이목재', '0008'],
+  ['비금속',   '0011'],
+  ['의료정밀', '0015'],
+  ['유통업',   '0017'], ['유통',     '0017'],
+  ['전기가스', '0018'],
+  ['건설',     '0019'],
+  ['운수창고', '0020'],
+  ['통신',     '0021'],
+  ['금융',     '0022'],
+  ['은행',     '0023'],
+  ['증권',     '0024'],
+  ['보험',     '0025'],
+  ['서비스',   '0026'],
+];
+
+function sectorNameToCode(name: string): string {
+  for (const [key, code] of SECTOR_NAME_TO_CODE) {
+    if (name.includes(key)) return code;
+  }
+  return '';
+}
+
+async function fetchSectorChange(sectorCode: string, sectorName: string, client: AxiosInstance): Promise<{ changeRate: number; change5day: number }> {
+  const code = sectorCode || sectorNameToCode(sectorName);
+  if (!code) return { changeRate: 0, change5day: 0 };
+  if (sectorCache[code]) return sectorCache[code];
   try {
     const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-index-price', {
       headers: { tr_id: 'FHPUP02100000' },
-      params: { FID_COND_MRKT_DIV_CODE: 'U', FID_INPUT_ISCD: sectorCode },
+      params: { FID_COND_MRKT_DIV_CODE: 'U', FID_INPUT_ISCD: code },
     }));
     const d = res.data.output ?? {};
     const result = {
       changeRate: parseFloat(d.bstp_nmix_prdy_ctrt)  || 0,
       change5day: parseFloat(d.bstp_nmix_wghn_avrg)  || 0,
     };
-    sectorCache[sectorCode] = result;
+    sectorCache[code] = result;
     return result;
   } catch {
     return { changeRate: 0, change5day: 0 };
@@ -344,20 +549,20 @@ async function fetchSectorChange(sectorCode: string, client: AxiosInstance): Pro
 
 // ─── 섹터 평균 PER/PBR (정적 기본값) ─────────────────────────────────────────
 
-const SECTOR_DEFAULTS: Record<string, { perSector: number; pbrSector: number; pfcrSector: number }> = {
-  default:    { perSector: 12,  pbrSector: 1.2,  pfcrSector: 12 },
-  전기전자:   { perSector: 18,  pbrSector: 1.8,  pfcrSector: 15 },
-  반도체:     { perSector: 22,  pbrSector: 2.5,  pfcrSector: 18 },
-  금융:       { perSector: 8,   pbrSector: 0.6,  pfcrSector: 8  },
-  은행:       { perSector: 7,   pbrSector: 0.5,  pfcrSector: 7  },
-  제약바이오: { perSector: 40,  pbrSector: 3.0,  pfcrSector: 30 },
-  자동차:     { perSector: 10,  pbrSector: 0.8,  pfcrSector: 10 },
-  화학:       { perSector: 11,  pbrSector: 1.0,  pfcrSector: 11 },
-  철강:       { perSector: 9,   pbrSector: 0.7,  pfcrSector: 9  },
-  건설:       { perSector: 10,  pbrSector: 0.9,  pfcrSector: 10 },
-  통신:       { perSector: 14,  pbrSector: 1.1,  pfcrSector: 12 },
-  유통:       { perSector: 15,  pbrSector: 1.3,  pfcrSector: 13 },
-  엔터:       { perSector: 25,  pbrSector: 2.5,  pfcrSector: 20 },
+const SECTOR_DEFAULTS: Record<string, { perSector: number; pbrSector: number; pcrSector: number; pfcrSector: number; roeSector: number }> = {
+  default:    { perSector: 12,  pbrSector: 1.2,  pcrSector: 9,   pfcrSector: 12, roeSector: 8  },
+  전기전자:   { perSector: 18,  pbrSector: 1.8,  pcrSector: 11,  pfcrSector: 15, roeSector: 12 },
+  반도체:     { perSector: 22,  pbrSector: 2.5,  pcrSector: 13,  pfcrSector: 18, roeSector: 15 },
+  금융:       { perSector: 8,   pbrSector: 0.6,  pcrSector: 7,   pfcrSector: 8,  roeSector: 8  },
+  은행:       { perSector: 7,   pbrSector: 0.5,  pcrSector: 6,   pfcrSector: 7,  roeSector: 6  },
+  제약바이오: { perSector: 40,  pbrSector: 3.0,  pcrSector: 22,  pfcrSector: 30, roeSector: 5  },
+  자동차:     { perSector: 10,  pbrSector: 0.8,  pcrSector: 7,   pfcrSector: 10, roeSector: 8  },
+  화학:       { perSector: 11,  pbrSector: 1.0,  pcrSector: 8,   pfcrSector: 11, roeSector: 7  },
+  철강:       { perSector: 9,   pbrSector: 0.7,  pcrSector: 6,   pfcrSector: 9,  roeSector: 6  },
+  건설:       { perSector: 10,  pbrSector: 0.9,  pcrSector: 7,   pfcrSector: 10, roeSector: 7  },
+  통신:       { perSector: 14,  pbrSector: 1.1,  pcrSector: 10,  pfcrSector: 12, roeSector: 9  },
+  유통:       { perSector: 15,  pbrSector: 1.3,  pcrSector: 11,  pfcrSector: 13, roeSector: 7  },
+  엔터:       { perSector: 25,  pbrSector: 2.5,  pcrSector: 15,  pfcrSector: 20, roeSector: 10 },
 };
 
 function getSectorAvg(sectorName: string) {
@@ -374,7 +579,7 @@ export async function getStockPrice(code: string): Promise<Partial<StockData>> {
   return fetchPrice(code, client);
 }
 
-export async function getScreenerData(code: string): Promise<StockScreenData> {
+export async function getScreenerData(code: string, lean = false): Promise<StockScreenData> {
   const client = await getClient();
 
   const wrap = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
@@ -385,28 +590,113 @@ export async function getScreenerData(code: string): Promise<StockScreenData> {
     }
   };
 
-  // rateGet이 전역 큐로 속도 제한 — 여기서는 순서 보장만
-  const [priceData, investorData, financialData, dailyData, kospiChg] = await Promise.all([
+  // lean=true(스크리너용): FHKST66430200(CPS) 생략 — fetchFinancial.pcr로 폴백
+  const [priceData, investorData, financialData, profData, dailyData, kospiChg] = await Promise.all([
     wrap('현재가', () => fetchPrice(code, client)),
     wrap('투자자', () => fetchInvestor(code, client)),
     wrap('재무',   () => fetchFinancial(code, client)),
+    lean ? Promise.resolve({} as { cps?: number; thtrNtin?: number }) : fetchProfitabilityRatios(code, client),
     wrap('거래량', () => fetchDailyData(code, client)),
     wrap('지수',   () => fetchKospiChange(client)),
   ]);
 
-  const sectorIdx = await fetchSectorChange(priceData.sectorCode, client);
+  const sectorIdx = await fetchSectorChange(priceData.sectorCode, priceData.sectorName, client);
   const sectorAvg = getSectorAvg(priceData.sectorName);
+
+  const price    = priceData.price ?? 0;
+  const eps      = financialData.eps;
+  const bps      = financialData.bps;
+  const lstnStcn = priceData.lstnStcn ?? 0;
+
+  // PER/PBR: KIS 현재가 API 직접값 우선 → eps/bps 역산 폴백
+  const per = priceData.perFromApi
+    ?? financialData.per
+    ?? (eps && eps > 0 && price > 0 ? parseFloat((price / eps).toFixed(2)) : undefined);
+  const pbr = priceData.pbrFromApi
+    ?? financialData.pbr
+    ?? (bps && bps > 0 && price > 0 ? parseFloat((price / bps).toFixed(2)) : undefined);
+
+  // ROE = EPS / BPS × 100 (%)
+  const roe = (eps && eps > 0 && bps && bps > 0)
+    ? parseFloat((eps / bps * 100).toFixed(1))
+    : undefined;
+
+  // PCR: ① KIS CPS → ② DART OCF → ③ KIS pcr 필드 → ④ 당기순이익 × 업종 OCF배수 추정
+  // PFCR: ① DART (OCF-CapEx)/주 → ② KIS pfcr 필드
+  let pcr: number | undefined;
+  let pfcr: number | undefined;
+  let pcrEstimated = false;
+  let pfcrEstimated = false;
+
+  // ① KIS FHKST66430200: cps(주당현금흐름, 원/주)
+  const kissCps = profData.cps;
+  if (kissCps && kissCps > 0 && price > 0) {
+    pcr = parseFloat((price / kissCps).toFixed(1));
+  }
+
+  // ②는 enrichWithDart()가 백그라운드에서 처리
+
+  // ③ KIS FHKST66430300 pcr/pfcr 필드 폴백
+  if (!pcr) {
+    const pcrApi = financialData.pcr;
+    const fcfPs  = financialData.fcfPerShare;
+    pcr  = pcrApi;
+    pfcr = pfcr ?? financialData.pfcr
+      ?? (fcfPs && fcfPs > 0 && price > 0 ? parseFloat((price / fcfPs).toFixed(2)) : undefined);
+    if (!pfcr && pcrApi && pcrApi > 0) {
+      pfcr = parseFloat((pcrApi * 1.35).toFixed(1));
+      pfcrEstimated = true;
+    }
+  }
+
+  // ④ 당기순이익(억원) × 업종별 OCF/NI 배수로 PCR 추정 (최후 수단)
+  // 업종별 OCF/NI 배수: D&A 규모 차이 반영
+  if (!pcr && profData.thtrNtin && lstnStcn > 0 && price > 0) {
+    const niWon = profData.thtrNtin * 1e8;  // 억원 → 원
+    const niPerShare = niWon / lstnStcn;
+    if (niPerShare > 0) {
+      const OCF_MULT_MAP: [string, number][] = [
+        ['반도체', 1.5], ['전기전자', 1.8], ['통신', 2.0], ['자동차', 1.6],
+        ['화학', 1.5], ['철강', 1.4], ['건설', 0.9], ['금융', 0.8], ['은행', 0.8],
+        ['제약', 1.3], ['바이오', 1.3], ['유통', 1.2], ['엔터', 1.1],
+      ];
+      const sn = priceData.sectorName ?? '';
+      const ocfMult = OCF_MULT_MAP.find(([k]) => sn.includes(k))?.[1] ?? 1.5;
+      const cpsEst = niPerShare * ocfMult;
+      pcr = parseFloat((price / cpsEst).toFixed(1));
+      pcrEstimated = true;
+    }
+  }
+
+  // 장 중 투자자 금액 미제공 시 수량 × 현재가로 추정 (단위: 백만원)
+  let { foreignNetAmount, institutionNetAmount, retailNetAmount } = investorData;
+  if (investorData.investorIsEstimated && price > 0) {
+    // qty(주) × price(원) / 1,000,000 = 백만원
+    foreignNetAmount     = Math.round((investorData.foreignNetQty     ?? 0) * price / 1_000_000);
+    institutionNetAmount = Math.round((investorData.institutionNetQty ?? 0) * price / 1_000_000);
+    retailNetAmount      = Math.round((investorData.retailNetQty      ?? 0) * price / 1_000_000);
+  }
 
   return {
     ...priceData,
     ...investorData,
-    per:        financialData.per,
-    pbr:        financialData.pbr,
-    pcr:        financialData.pcr,
-    eps:        financialData.eps,
-    bps:        financialData.bps,
+    foreignNetAmount,
+    institutionNetAmount,
+    retailNetAmount,
+    lstnStcn,
+    per,
+    pbr,
+    pcr,
+    pfcr,
+    pcrEstimated,
+    pfcrEstimated,
+    eps,
+    bps,
+    roe,
+    fcfPerShare: financialData.fcfPerShare,
     ...sectorAvg,
     avgVolume20:       dailyData.avgVol20,
+    prevVolume:        dailyData.prevVol,
     sectorChangeRate:  sectorIdx.changeRate,
     sectorChange:      sectorIdx.changeRate,
     sector5dayChange:  sectorIdx.change5day,
@@ -546,10 +836,103 @@ export async function getCandlesForChart(code: string, period: ChartPeriod): Pro
   return fetchPeriodCandles(code, p, client);
 }
 
+async function fetchOrderBook(code: string, client: AxiosInstance): Promise<OrderBook> {
+  const mktCode = KOSPI200_SET.has(code) ? 'J' : 'Q';
+  try {
+    const res = await rateGet(() => client.get('/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn', {
+      headers: { tr_id: 'FHKST01010200' },
+      params: { FID_COND_MRKT_DIV_CODE: mktCode, FID_INPUT_ISCD: code },
+    }));
+    if (res.data.rt_cd !== '0') return { asks: [], bids: [], totalAskQty: 0, totalBidQty: 0 };
+    // output1 is a single object with askp1~askp10 / bidp1~bidp10
+    const raw1 = res.data.output1;
+    const raw2 = res.data.output2;
+    const d = (Array.isArray(raw1) ? raw1[0] : raw1)
+           ?? (Array.isArray(raw2) ? raw2[0] : raw2)
+           ?? {};
+    const asks: OrderBookLevel[] = [];
+    const bids: OrderBookLevel[] = [];
+    for (let i = 5; i >= 1; i--) {
+      const p = parseInt(d[`askp${i}`], 10);
+      const q = parseInt(d[`askp_rsqn${i}`], 10);
+      if (p > 0) asks.push({ price: p, qty: q || 0 });
+    }
+    for (let i = 1; i <= 5; i++) {
+      const p = parseInt(d[`bidp${i}`], 10);
+      const q = parseInt(d[`bidp_rsqn${i}`], 10);
+      if (p > 0) bids.push({ price: p, qty: q || 0 });
+    }
+    return {
+      asks,
+      bids,
+      totalAskQty: parseInt(d.total_askp_rsqn, 10) || 0,
+      totalBidQty: parseInt(d.total_bidp_rsqn, 10) || 0,
+    };
+  } catch {
+    return { asks: [], bids: [], totalAskQty: 0, totalBidQty: 0 };
+  }
+}
+
+async function refreshInvestorEstimate(code: string, currentPrice: number) {
+  const client = await getClient();
+  const inv = await fetchInvestor(code, client);
+  let { foreignNetAmount, institutionNetAmount, retailNetAmount } = inv;
+  if (inv.investorIsEstimated && currentPrice > 0) {
+    foreignNetAmount     = Math.round((inv.foreignNetQty     ?? 0) * currentPrice / 1_000_000);
+    institutionNetAmount = Math.round((inv.institutionNetQty ?? 0) * currentPrice / 1_000_000);
+    retailNetAmount      = Math.round((inv.retailNetQty      ?? 0) * currentPrice / 1_000_000);
+  }
+  return {
+    foreignNetAmount,
+    institutionNetAmount,
+    retailNetAmount,
+    investorUpdatedAt:      inv.investorUpdatedAt,
+    investorIsEstimated:    inv.investorIsEstimated,
+    prevForeignNetAmount:   inv.prevForeignNetAmount,
+    prevInstitutionNetAmount: inv.prevInstitutionNetAmount,
+    prevRetailNetAmount:    inv.prevRetailNetAmount,
+    prevInvestorDate:       inv.prevInvestorDate,
+    foreignConsecutiveDays: inv.foreignConsecutiveDays,
+    institutionConsecutiveDays: inv.institutionConsecutiveDays,
+    foreignTurnedPositive:  inv.foreignTurnedPositive,
+  };
+}
+
+// ─── DART 보강 (백그라운드) — OCF 기반 PCR/PFCR ──────────────────────────────
+
+export async function enrichWithDart(
+  code: string,
+  price: number,
+  lstnStcn: number,
+): Promise<Partial<StockData>> {
+  if (price <= 0 || lstnStcn <= 0) return {};
+  try {
+    const cfData = await fetchCashFlowData(code);
+    if (!cfData || cfData.ocf <= 0) return {};
+    const cpsWon   = cfData.ocf / lstnStcn;
+    if (cpsWon <= 0) return {};
+    const fcfPerSh = (cfData.ocf - cfData.capex) / lstnStcn;
+    return {
+      pcr:           parseFloat((price / cpsWon).toFixed(1)),
+      pfcr:          fcfPerSh > 0 ? parseFloat((price / fcfPerSh).toFixed(1)) : undefined,
+      pcrEstimated:  false,
+      pfcrEstimated: false,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export const kisApi = {
   getStockPrice,
   getScreenerData,
+  getScreenerDataFast: (code: string) => getScreenerData(code, true),
   getCandles,
   getCandlesForChart,
+  getOrderBook: async (code: string) => {
+    const client = await getClient();
+    return fetchOrderBook(code, client);
+  },
+  refreshInvestorEstimate,
   resetClient,
 };

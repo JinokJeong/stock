@@ -6,17 +6,14 @@ import { AlertCondition, LogicOperator } from '../types/alert';
 import { RecommendStock, ScoreBreakdown } from '../types/screener';
 import { StockScreenData } from '../types/stock';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function calcSupplyScore(s: StockScreenData): number {
   let score = 0;
   if (s.foreignConsecutiveDays >= 3) score += 20;
   else if (s.foreignConsecutiveDays >= 1) score += 8;
   if (s.institutionBuyAmount > 0) score += 10;
-  if (s.tradeStrength >= 140) score += 10;
-  else if (s.tradeStrength >= 120) score += 5;
+  if ((s.volTurnover ?? 0) >= 3) score += 10;
+  else if ((s.volTurnover ?? 0) >= 1) score += 5;
   return score;
 }
 
@@ -56,6 +53,38 @@ export function calcRecommendScore(s: StockScreenData): number {
   return Math.min(calcSupplyScore(s) + calcValueScore(s) + calcMomentumScore(s), 100);
 }
 
+const BATCH_SIZE = 18; // KIS 초당 20건 제한 — 여유 2건 확보
+
+function toRecommendStock(data: StockScreenData): RecommendStock {
+  const supply = calcSupplyScore(data);
+  const value = calcValueScore(data);
+  const momentum = calcMomentumScore(data);
+  const score = Math.min(supply + value + momentum, 100);
+  return {
+    code: data.code,
+    name: data.name,
+    market: data.market,
+    price: data.price,
+    changeRate: data.changeRate,
+    score,
+    scoreBreakdown: { supply, value, momentum },
+    volTurnover: data.volTurnover ?? 0,
+    foreignConsecutiveDays: data.foreignConsecutiveDays,
+    institutionBuyAmount: data.institutionBuyAmount,
+    pbr: data.pbr ?? 0,
+    per: data.per ?? 0,
+    pfcr: data.pfcr ?? 0,
+    pbrSector: data.pbrSector ?? 1.2,
+    perSector: data.perSector ?? 12,
+    pfcrSector: data.pfcrSector ?? 12,
+    volume: data.volume,
+    avgVolume20: data.avgVolume20,
+    sectorChangeRate: data.sectorChangeRate,
+    themeGrade: data.themeGrade,
+    themeKeyword: data.sectorName,
+  };
+}
+
 export async function runScreener(
   conditions: AlertCondition[],
   logic: LogicOperator[],
@@ -63,49 +92,27 @@ export async function runScreener(
 ): Promise<RecommendStock[]> {
   const results: RecommendStock[] = [];
   const universe = STOCK_UNIVERSE;
+  let done = 0;
 
-  for (let i = 0; i < universe.length; i++) {
-    const code = universe[i];
-    try {
-      const data = await kisApi.getScreenerData(code);
-      const passes = conditions.length === 0 || evaluateConditions(conditions, logic, data);
-      if (passes) {
-        const supply = calcSupplyScore(data);
-        const value = calcValueScore(data);
-        const momentum = calcMomentumScore(data);
-        const score = Math.min(supply + value + momentum, 100);
-        const breakdown: ScoreBreakdown = { supply, value, momentum };
+  onProgress(0, universe.length);
 
-        results.push({
-          code: data.code,
-          name: data.name,
-          market: data.market,
-          price: data.price,
-          changeRate: data.changeRate,
-          score,
-          scoreBreakdown: breakdown,
-          tradeStrength: data.tradeStrength,
-          foreignConsecutiveDays: data.foreignConsecutiveDays,
-          institutionBuyAmount: data.institutionBuyAmount,
-          pbr: data.pbr ?? 0,
-          per: data.per ?? 0,
-          pfcr: data.pfcr ?? 0,
-          pbrSector: data.pbrSector ?? 1.2,
-          perSector: data.perSector ?? 12,
-          pfcrSector: data.pfcrSector ?? 12,
-          volume: data.volume,
-          avgVolume20: data.avgVolume20,
-          sectorChangeRate: data.sectorChangeRate,
-          themeGrade: data.themeGrade,
-          themeKeyword: data.sectorName,
-        });
+  for (let i = 0; i < universe.length; i += BATCH_SIZE) {
+    const batch = universe.slice(i, i + BATCH_SIZE);
+    const settled = await Promise.allSettled(
+      batch.map((code) => kisApi.getScreenerDataFast(code))
+    );
+
+    for (const res of settled) {
+      if (res.status === 'fulfilled') {
+        const data = res.value;
+        const passes = conditions.length === 0 || evaluateConditions(conditions, logic, data);
+        if (passes) results.push(toRecommendStock(data));
       }
-    } catch {}
+      done += 1;
+      onProgress(done, universe.length);
+    }
 
-    onProgress(i + 1, universe.length);
-
-    // API 호출 제한: 초당 최대 20건 (20건마다 1초 대기)
-    if (i % 20 === 19) await sleep(1000);
+    // rate limit은 kisApi 내부 rateGet 큐가 제어하므로 별도 sleep 불필요
   }
 
   return results.sort((a, b) => b.score - a.score);

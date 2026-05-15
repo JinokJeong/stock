@@ -14,7 +14,7 @@ export interface RecommendStock {
   changeRate: number;
   score: number;             // 총점 0~100
   scoreBreakdown: ScoreBreakdown;
-  tradeStrength: number;
+  volTurnover: number;
   foreignConsecutiveDays: number;
   institutionBuyAmount: number;
   pbr: number;

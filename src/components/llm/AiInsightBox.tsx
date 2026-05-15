@@ -1,6 +1,6 @@
 // AI 코멘트 표시 컴포넌트 — 온디바이스 LLM 생성 인사이트
 import React from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
 import { colors } from '../../theme/colors';
 
 interface Props {
@@ -24,9 +24,11 @@ export function AiInsightBox({ comment, loading = false, modelReady = true }: Pr
           <Text style={styles.loadingText}>분석 중...</Text>
         </View>
       ) : (
-        <Text style={styles.comment}>
-          {comment || (modelReady ? '신호 데이터 대기 중' : 'LLM 준비 후 분석 가능')}
-        </Text>
+        <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator nestedScrollEnabled>
+          <Text style={styles.comment}>
+            {comment || (modelReady ? '신호 데이터 대기 중' : 'LLM 준비 후 분석 가능')}
+          </Text>
+        </ScrollView>
       )}
     </View>
   );
@@ -72,6 +74,9 @@ const styles = StyleSheet.create({
   loadingText: {
     color: colors.text2,
     fontSize: 13,
+  },
+  scrollArea: {
+    maxHeight: 120,
   },
   comment: {
     color: colors.text,

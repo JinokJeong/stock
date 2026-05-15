@@ -35,7 +35,7 @@ export async function sendLocalAlert(title: string, body: string): Promise<void>
 function checkCondition(c: AlertCondition, d: StockData): boolean {
   switch (c.type) {
     case '체결강도':
-      return d.tradeStrength >= (c.value ?? 100);
+      return (d.volTurnover ?? 0) >= (c.value ?? 1);
 
     case '외국인순매수':
       if (c.op === 'turn_positive') return d.foreignTurnedPositive;

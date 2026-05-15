@@ -51,7 +51,7 @@ export function StockScoreCard({ stock, rank, onPress }: Props) {
 
       {/* 핵심 지표 */}
       <View style={styles.indicators}>
-        <Text style={styles.ind}>체결강도 {stock.tradeStrength.toFixed(0)}</Text>
+        {(stock.volTurnover ?? 0) > 0 && <Text style={styles.ind}>회전율 {stock.volTurnover.toFixed(2)}%</Text>}
         {stock.foreignConsecutiveDays > 0 && (
           <Text style={styles.ind}>외국인 {stock.foreignConsecutiveDays}일 연속</Text>
         )}
